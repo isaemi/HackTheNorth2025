@@ -6,6 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
 import { ArrowLeft, Clock, Users, Target } from "lucide-react";
 import backgroundImage from "@/assets/background-image.png";
+import api from "@/services/api";
 
 const PresetWorkout = () => {
   const navigate = useNavigate();
@@ -28,32 +29,25 @@ const PresetWorkout = () => {
 
   const handleStartWorkout = async () => {
     try {
-      let response = await fetch("http://localhost:5000/api/cohere", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
+      let resp = await api.post("/cohere", {
+        level: selectedLevel,
+        style: selectedStyle,
+        duration: selectedDuration,
+        injuries,
+      });
+
+      // Fallback to /martian if cohere route fails
+      if (resp.status < 200 || resp.status >= 300) {
+        console.warn("Cohere failed, fallback to Martian");
+        resp = await api.post("/martian", {
           level: selectedLevel,
           style: selectedStyle,
           duration: selectedDuration,
           injuries,
-        }),
-      });
-
-      if (!response.ok) {
-        console.warn("Cohere failed, fallback to Martian");
-        response = await fetch("http://localhost:5000/api/martian", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            level: selectedLevel,
-            style: selectedStyle,
-            duration: selectedDuration,
-            injuries,
-          }),
         });
       }
 
-      const data = await response.json();
+      const data = resp.data;
       console.log("Workout routines:", data);
 
       navigate("/session", {
