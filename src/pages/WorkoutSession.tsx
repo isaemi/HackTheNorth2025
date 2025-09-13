@@ -2,199 +2,273 @@ import { useEffect, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { ArrowLeft, Camera, Play, Pause, RotateCcw } from "lucide-react";
+import { ArrowLeft } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 
+// MediaPipe
+import { Pose, POSE_CONNECTIONS } from "@mediapipe/pose";
+import { Camera as MediaPipeCamera } from "@mediapipe/camera_utils";
+
+// === Angle Utils ===
+const angleBetween = (a: any, b: any, c: any) => {
+  const ab = { x: a.x - b.x, y: a.y - b.y, z: (a.z ?? 0) - (b.z ?? 0) };
+  const cb = { x: c.x - b.x, y: c.y - b.y, z: (c.z ?? 0) - (b.z ?? 0) };
+  const dot = ab.x * cb.x + ab.y * cb.y + ab.z * cb.z;
+  const abLen = Math.hypot(ab.x, ab.y, ab.z);
+  const cbLen = Math.hypot(cb.x, cb.y, cb.z);
+  return Math.acos(dot / (abLen * cbLen + 1e-6)) * (180 / Math.PI);
+};
+
+const extractAngles = (lm: any) => ({
+  left_knee: angleBetween(lm[23], lm[25], lm[27]),
+  right_knee: angleBetween(lm[24], lm[26], lm[28]),
+  left_elbow: angleBetween(lm[11], lm[13], lm[15]),
+  right_elbow: angleBetween(lm[12], lm[14], lm[16]),
+});
+
+const scorePose = (angles: any, template: any) => {
+  if (!template?.angles_deg) return null;
+  const ref = template.angles_deg;
+  const tol = template.tolerance_deg || {};
+  const weights = template.weights || {};
+  let total = 0,
+    wsum = 0;
+
+  for (const k of Object.keys(ref)) {
+    if (angles[k] == null) continue;
+    const diff = Math.abs(angles[k] - ref[k]);
+    const norm = Math.min(diff / (tol[k] ?? 20), 1);
+    const w = weights[k] ?? 1;
+    total += (1 - norm) * w;
+    wsum += w;
+  }
+  if (wsum === 0) return null;
+  return Math.round((total / wsum) * 100);
+};
+
+// === Draw Skeleton ===
+function drawSkeleton(
+  ctx: CanvasRenderingContext2D,
+  landmarks: any[],
+  connections: Array<[number, number]>
+) {
+  // lines
+  ctx.strokeStyle = "#00FF00";
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  for (const [i, j] of connections) {
+    const a = landmarks[i];
+    const b = landmarks[j];
+    if (!a || !b) continue;
+    const ax = a.x * ctx.canvas.width;
+    const ay = a.y * ctx.canvas.height;
+    const bx = b.x * ctx.canvas.width;
+    const by = b.y * ctx.canvas.height;
+    ctx.moveTo(ax, ay);
+    ctx.lineTo(bx, by);
+  }
+  ctx.stroke();
+
+  // points
+  ctx.fillStyle = "#FF0000";
+  for (const p of landmarks) {
+    if (!p) continue;
+    const x = p.x * ctx.canvas.width;
+    const y = p.y * ctx.canvas.height;
+    ctx.beginPath();
+    ctx.arc(x, y, 3, 0, Math.PI * 2);
+    ctx.fill();
+  }
+}
+
+// === Main Component ===
 const WorkoutSession = () => {
   const navigate = useNavigate();
   const location = useLocation();
   const { toast } = useToast();
+
   const videoRef = useRef<HTMLVideoElement>(null);
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const [isWebcamActive, setIsWebcamActive] = useState(false);
+  const liveCanvasRef = useRef<HTMLCanvasElement>(null); // 오른쪽: 카메라
+  const templateCanvasRef = useRef<HTMLCanvasElement>(null); // 왼쪽: 템플릿
+
   const [sessionData, setSessionData] = useState<any>(null);
-  const [currentPose, setCurrentPose] = useState("Mountain Pose");
-  const [reps, setReps] = useState(0);
+  const [currentStep, setCurrentStep] = useState(0);
+  const [score, setScore] = useState<number | null>(null);
   const [feedback, setFeedback] = useState("Position yourself in the camera view");
 
   useEffect(() => {
-    if (location.state) {
-      setSessionData(location.state);
-    }
+    if (location.state) setSessionData(location.state);
   }, [location.state]);
 
-  const startWebcam = async () => {
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ video: true });
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-        setIsWebcamActive(true);
-        toast({
-          title: "Webcam activated",
-          description: "Position yourself in the camera view to begin",
-        });
-      }
-    } catch (error) {
-      console.error("Error accessing webcam:", error);
-      toast({
-        title: "Camera access denied",
-        description: "Please allow camera access to use pose detection",
-        variant: "destructive",
-      });
-    }
-  };
-
-  const stopWebcam = () => {
-    if (videoRef.current?.srcObject) {
-      const stream = videoRef.current.srcObject as MediaStream;
-      stream.getTracks().forEach(track => track.stop());
-      videoRef.current.srcObject = null;
-      setIsWebcamActive(false);
-    }
-  };
-
-  const simulatePoseDetection = () => {
-    // Simulate pose detection feedback
-    const feedbacks = [
-      "Great form! Keep it up!",
-      "Lower your hips slightly",
-      "Straighten your back",
-      "Perfect squat depth!",
-      "Align your knees with your toes"
-    ];
-    setFeedback(feedbacks[Math.floor(Math.random() * feedbacks.length)]);
-    setReps(prev => prev + 1);
-  };
-
+  // ⏱️ 10초마다 다음 템플릿으로 변경 (loop 모드)
   useEffect(() => {
-    if (isWebcamActive) {
-      const interval = setInterval(simulatePoseDetection, 3000);
-      return () => clearInterval(interval);
+    if (!sessionData?.templates) return;
+    const interval = setInterval(() => {
+      setCurrentStep((prev) =>
+        prev + 1 < sessionData.templates.length ? prev + 1 : 0
+      );
+    }, 10000);
+    return () => clearInterval(interval);
+  }, [sessionData]);
+
+  // draw template
+  useEffect(() => {
+    if (!templateCanvasRef.current || !sessionData?.templates) return;
+    const ctx = templateCanvasRef.current.getContext("2d");
+    if (!ctx) return;
+    ctx.clearRect(
+      0,
+      0,
+      templateCanvasRef.current.width,
+      templateCanvasRef.current.height
+    );
+    const template = sessionData.templates[currentStep];
+    if (template?.landmarks) {
+      drawSkeleton(ctx, template.landmarks, POSE_CONNECTIONS as any);
     }
-  }, [isWebcamActive]);
+  }, [sessionData, currentStep]);
+
+  // Webcam + Pose Detection
+  useEffect(() => {
+    if (!videoRef.current || !liveCanvasRef.current) return;
+
+    const pose = new Pose({
+      locateFile: (file) =>
+        `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`,
+    });
+
+    pose.setOptions({
+      modelComplexity: 1,
+      smoothLandmarks: true,
+      enableSegmentation: false,
+      minDetectionConfidence: 0.5,
+      minTrackingConfidence: 0.5,
+    });
+
+    pose.onResults((results: any) => {
+      const canvas = liveCanvasRef.current!;
+      const ctx = canvas.getContext("2d")!;
+      ctx.save();
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+      // mirror
+      ctx.translate(canvas.width, 0);
+      ctx.scale(-1, 1);
+
+      // background video
+      ctx.drawImage(results.image, 0, 0, canvas.width, canvas.height);
+
+      if (results.poseLandmarks) {
+        drawSkeleton(ctx, results.poseLandmarks, POSE_CONNECTIONS as any);
+
+        // angle + score
+        const angles = extractAngles(results.poseLandmarks);
+        const template = sessionData?.templates?.[currentStep];
+        const s = scorePose(angles, template);
+        if (s != null) setScore(s);
+
+        if (angles.left_knee != null) {
+          setFeedback(`Left knee angle: ${angles.left_knee.toFixed(1)}°`);
+        }
+      }
+
+      ctx.restore();
+    });
+
+    const camera = new MediaPipeCamera(videoRef.current, {
+      onFrame: async () => {
+        await pose.send({ image: videoRef.current! });
+      },
+      width: 640,
+      height: 480,
+    });
+
+    camera.start();
+
+    toast({
+      title: "Webcam activated",
+      description: "Pose detection started",
+    });
+  }, [sessionData, currentStep]);
 
   return (
-    <div className="min-h-screen bg-gradient-background p-6">
+    <div className="h-screen bg-gradient-background p-6">
       <div className="max-w-7xl mx-auto">
         {/* Header */}
         <div className="flex items-center justify-between mb-6">
-          <div className="flex items-center gap-4">
-            <Button 
-              variant="ghost" 
-              size="sm"
-              onClick={() => navigate('/')}
-              className="flex items-center gap-2"
-            >
-              <ArrowLeft className="w-4 h-4" />
-              End Session
-            </Button>
-            <h1 className="text-3xl font-bold text-foreground">
-              {sessionData?.type === 'preset' ? 
-                `${sessionData.style} - ${sessionData.level}` : 
-                'Custom Video Analysis'
-              }
-            </h1>
-          </div>
-          
-          <div className="flex items-center gap-2">
-            <Button
-              variant={isWebcamActive ? "destructive" : "default"}
-              onClick={isWebcamActive ? stopWebcam : startWebcam}
-              className="flex items-center gap-2"
-            >
-              <Camera className="w-4 h-4" />
-              {isWebcamActive ? "Stop Camera" : "Start Camera"}
-            </Button>
-          </div>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => navigate("/")}
+            className="flex items-center gap-2"
+          >
+            <ArrowLeft className="w-4 h-4" />
+            End Session
+          </Button>
+          <h1 className="text-3xl font-bold text-foreground">
+            {sessionData?.templates?.[currentStep]?.pose_id ||
+              "Custom Video Analysis"}
+          </h1>
         </div>
 
-        {/* Main Content */}
+        {/* 2 columns */}
         <div className="grid lg:grid-cols-2 gap-6 mb-6">
-          {/* Instructions Panel */}
-          <Card className="bg-gradient-card backdrop-blur-sm border-0 shadow-card">
+          {/* Left: Template skeleton */}
+          <Card>
             <CardHeader>
-              <CardTitle>Current Exercise: {currentPose}</CardTitle>
+              <CardTitle>
+                Template Pose ({currentStep + 1}/{sessionData?.templates?.length})
+              </CardTitle>
             </CardHeader>
             <CardContent>
-              <div className="aspect-video bg-muted rounded-lg mb-4 flex items-center justify-center">
-                <div className="text-center">
-                  <div className="w-24 h-24 mx-auto bg-primary/20 rounded-full flex items-center justify-center mb-4">
-                    <Play className="w-12 h-12 text-primary" />
-                  </div>
-                  <p className="text-sm text-muted-foreground">
-                    Exercise demonstration will appear here
-                  </p>
-                </div>
-              </div>
-              
-              <div className="space-y-2">
-                <h4 className="font-semibold">Instructions:</h4>
-                <ul className="text-sm text-muted-foreground space-y-1">
-                  <li>• Stand with feet shoulder-width apart</li>
-                  <li>• Keep your back straight</li>
-                  <li>• Lower down until thighs are parallel</li>
-                  <li>• Push through heels to return</li>
-                </ul>
-              </div>
+              <canvas
+                ref={templateCanvasRef}
+                width={640}
+                height={480}
+                className="w-full h-auto bg-gray-100 rounded"
+              />
             </CardContent>
           </Card>
 
-          {/* Webcam Feed */}
-          <Card className="bg-gradient-card backdrop-blur-sm border-0 shadow-card">
+          {/* Right: Live camera */}
+          <Card>
             <CardHeader>
-              <CardTitle>Live Camera Feed</CardTitle>
+              <CardTitle>Live Camera</CardTitle>
             </CardHeader>
             <CardContent>
-              <div className="aspect-video bg-black rounded-lg relative overflow-hidden">
+              <div className="aspect-video bg-black rounded relative overflow-hidden">
                 <video
                   ref={videoRef}
                   autoPlay
                   playsInline
                   muted
-                  className="w-full h-full object-cover"
+                  className="hidden"
                 />
                 <canvas
-                  ref={canvasRef}
+                  ref={liveCanvasRef}
+                  width={640}
+                  height={480}
                   className="absolute inset-0 w-full h-full"
                 />
-                
-                {!isWebcamActive && (
-                  <div className="absolute inset-0 flex items-center justify-center">
-                    <Button 
-                      variant="hero"
-                      onClick={startWebcam}
-                      className="flex items-center gap-2"
-                    >
-                      <Camera className="w-5 h-5" />
-                      Activate Camera
-                    </Button>
-                  </div>
-                )}
               </div>
             </CardContent>
           </Card>
         </div>
 
-        {/* Stats & Feedback */}
-        <div className="grid md:grid-cols-3 gap-4">
-          <Card className="bg-gradient-card backdrop-blur-sm border-0 shadow-card">
+        {/* Stats */}
+        <div className="grid md:grid-cols-2 gap-4">
+          <Card>
             <CardContent className="p-6 text-center">
-              <h3 className="text-2xl font-bold text-primary">{reps}</h3>
-              <p className="text-sm text-muted-foreground">Repetitions</p>
+              <h3 className="text-2xl font-bold">
+                {score != null ? `${score}%` : "—"}
+              </h3>
+              <p>Form Accuracy</p>
             </CardContent>
           </Card>
-          
-          <Card className="bg-gradient-card backdrop-blur-sm border-0 shadow-card">
-            <CardContent className="p-6 text-center">
-              <h3 className="text-2xl font-bold text-accent">85%</h3>
-              <p className="text-sm text-muted-foreground">Form Accuracy</p>
-            </CardContent>
-          </Card>
-          
-          <Card className="bg-gradient-card backdrop-blur-sm border-0 shadow-card">
+          <Card>
             <CardContent className="p-6">
               <h4 className="font-semibold mb-2">Live Feedback</h4>
-              <p className="text-sm text-muted-foreground">{feedback}</p>
+              <p>{feedback}</p>
             </CardContent>
           </Card>
         </div>

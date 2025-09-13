@@ -1,0 +1,6 @@
+[
+  { "name": "Push Ups", "level": "Beginner", "part": "upper body", "duration": 5, "injury_safe": ["knee"] },
+  { "name": "Plank", "level": "Beginner", "part": "core", "duration": 3, "injury_safe": ["shoulder"] },
+  { "name": "Squats", "level": "Intermediate", "part": "legs", "duration": 10, "injury_safe": [] },
+  { "name": "Bridge", "level": "Beginner", "part": "hips", "duration": 4, "injury_safe": ["shoulder"] }
+]
