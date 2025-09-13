@@ -1,0 +1,94 @@
+{
+  "pose_id": "archer",
+  "angles_deg": {
+    "left_elbow": 167.42282518931947,
+    "right_elbow": 24.995349138739087,
+    "left_knee": 176.12960364099402,
+    "right_knee": 142.8969040783087,
+    "left_shoulder": 88.40163941927082,
+    "right_shoulder": 131.94913147693518,
+    "left_hip": 61.27304375368462,
+    "right_hip": 7.47196784421361,
+    "spine_tilt": 15.890312288403493
+  },
+  "tolerance_deg": {
+    "left_elbow": 15.0,
+    "left_hip": 15.0,
+    "left_knee": 15.0,
+    "left_shoulder": 15.0,
+    "right_elbow": 15.0,
+    "right_hip": 15.0,
+    "right_knee": 15.0,
+    "right_shoulder": 15.0,
+    "spine_tilt": 15.0
+  },
+  "weights": {
+    "left_elbow": 1.0,
+    "left_hip": 1.4,
+    "left_knee": 1.4,
+    "left_shoulder": 1.4,
+    "right_elbow": 1.0,
+    "right_hip": 1.4,
+    "right_knee": 1.4,
+    "right_shoulder": 1.4,
+    "spine_tilt": 1.2
+  },
+  "symmetric": false,
+  "camera_view": "left",
+  "selection": "single_image",
+  "landmarks": {
+    "left_shoulder": {
+      "x": -0.011434763669967651,
+      "y": -0.9343390464782715
+    },
+    "right_shoulder": {
+      "x": 0.5434001088142395,
+      "y": -0.9343390464782715
+    },
+    "left_elbow": {
+      "x": -0.7046404480934143,
+      "y": -0.9769489169120789
+    },
+    "right_elbow": {
+      "x": 1.0455416440963745,
+      "y": -1.0693165063858032
+    },
+    "left_wrist": {
+      "x": -1.2937161922454834,
+      "y": -1.1469100713729858
+    },
+    "right_wrist": {
+      "x": 0.5764245986938477,
+      "y": -1.1516056060791016
+    },
+    "left_hip": {
+      "x": -0.10060301423072815,
+      "y": 0.06167221441864967
+    },
+    "right_hip": {
+      "x": 0.10060292482376099,
+      "y": -0.061672650277614594
+    },
+    "left_knee": {
+      "x": -0.8260018825531006,
+      "y": -0.4247247278690338
+    },
+    "right_knee": {
+      "x": 0.32157397270202637,
+      "y": -0.6880269050598145
+    },
+    "left_ankle": {
+      "x": -1.6310056447982788,
+      "y": -0.8889967799186707
+    },
+    "right_ankle": {
+      "x": 0.18181997537612915,
+      "y": -1.1267123222351074
+    },
+    "mid_hip": {
+      "x": 0.0,
+      "y": 0.0
+    }
+  },
+  "was_mirrored": false
+}

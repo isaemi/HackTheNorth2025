@@ -584,52 +584,9 @@ const WorkoutSession = () => {
       };
     }
 
-    // --- PREVIEW RENDERING with projection ---
-    const MIRROR_PREVIEW = true;
-
-    // Build compact set of points used by POSE_CONNECTIONS
-    const usedIdx = new Set<number>();
-    (POSE_CONNECTIONS as any as Array<[number, number]>).forEach(([i, j]) => {
-      usedIdx.add(i);
-      usedIdx.add(j);
-    });
-    const pts: XY[] = [];
-    usedIdx.forEach((i) => {
-      const p = lmArr[i];
-      if (p) pts[i] = { x: p.x, y: p.y };
-    });
-
-    // Project to canvas space (auto-detect canonical vs [0..1])
-    const proj = projectToCanvas(pts, canvas, {
-      mirror: MIRROR_PREVIEW,
-      marginFrac: 0.1,
-    });
-
-    // Dynamic stroke based on canvas size
-    const stroke = Math.max(2, Math.round(canvas.width * 0.008));
-
-    // Lines
-    ctx.strokeStyle = "#6b7280";
-    ctx.lineWidth = stroke;
-    ctx.beginPath();
-    (POSE_CONNECTIONS as any as Array<[number, number]>).forEach(([i, j]) => {
-      const a = proj[i],
-        b = proj[j];
-      if (!a || !b) return;
-      ctx.moveTo(a.x, a.y);
-      ctx.lineTo(b.x, b.y);
-    });
-    ctx.stroke();
-
-    // Points
-    ctx.fillStyle = "#9ca3af";
-    const r = Math.max(2, Math.round(stroke * 0.5));
-    proj.forEach((p) => {
-      if (!p) return;
-      ctx.beginPath();
-      ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
-      ctx.fill();
-    });
+    // Preview rendering disabled: hide stickman on template preview for now.
+    // We still compute and cache normalized template (above) for scoring.
+    // Leaving the canvas cleared so the card shows a blank area.
   }, [currentTemplate]);
 
   // Webcam + Pose Detection
