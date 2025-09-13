@@ -37,7 +37,7 @@ const UploadWorkout = () => {
       reader.onload = () => {
         try {
           const json = JSON.parse(reader.result as string);
-          setUploadedTemplates(prev => [...prev, json]);
+          setUploadedTemplates((prev) => [...prev, json]);
           toast({
             title: "Template loaded",
             description: `${file.name} applied.`,
