@@ -26,7 +26,6 @@ const PresetWorkout = () => {
 
   const durations = ["15 minutes", "30 minutes", "45 minutes", "1 Hour"];
 
-  
   const handleStartWorkout = async () => {
     try {
       let response = await fetch("http://localhost:5000/api/cohere", {
@@ -74,7 +73,9 @@ const PresetWorkout = () => {
   };
 
   const getAvailableStyles = () => {
-    return selectedCategory ? categories[selectedCategory as keyof typeof categories] : [];
+    return selectedCategory
+      ? categories[selectedCategory as keyof typeof categories]
+      : [];
   };
 
   return (
@@ -137,7 +138,9 @@ const PresetWorkout = () => {
               {Object.keys(categories).map((category) => (
                 <Button
                   key={category}
-                  variant={selectedCategory === category ? "default" : "outline"}
+                  variant={
+                    selectedCategory === category ? "default" : "outline"
+                  }
                   size="sm"
                   className="w-full justify-start text-xs"
                   onClick={() => {
@@ -169,7 +172,9 @@ const PresetWorkout = () => {
                   {getAvailableStyles().map((style) => (
                     <Badge
                       key={style}
-                      variant={selectedStyle === style ? "default" : "secondary"}
+                      variant={
+                        selectedStyle === style ? "default" : "secondary"
+                      }
                       className={`cursor-pointer text-center p-2 w-full block text-xs ${
                         selectedStyle === style
                           ? "bg-primary text-primary-foreground"
@@ -197,7 +202,9 @@ const PresetWorkout = () => {
               {durations.map((duration) => (
                 <Button
                   key={duration}
-                  variant={selectedDuration === duration ? "default" : "outline"}
+                  variant={
+                    selectedDuration === duration ? "default" : "outline"
+                  }
                   size="sm"
                   className="w-full justify-start text-xs"
                   onClick={() => setSelectedDuration(duration)}
