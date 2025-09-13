@@ -1,0 +1,577 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Yoga Live Scoring (MediaPipe)</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    :root { color-scheme: dark; }
+    body { margin:0; font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; background:#0b1020; color:#e9eefb; }
+    header, footer { padding: 12px 16px; background: #0f1530; border-bottom: 1px solid #1f2a4a; }
+    .wrap { display:flex; gap:16px; padding:16px; }
+    .left { flex: 1 1 60%; min-width: 320px; }
+    .right { flex: 1 1 40%; min-width: 260px; background:#0f1530; border:1px solid #1f2a4a; border-radius:12px; padding:12px; }
+    #stage { position:relative; width:100%; max-width: 960px; aspect-ratio:16/9; background:#070a18; border:1px solid #1f2a4a; border-radius:12px; overflow:hidden; }
+    #vid { display:none; }
+    #canvas { width:100%; height:100%; }
+    .controls { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+    .segmented { display:inline-flex; border:1px solid #2c3b74; border-radius:10px; overflow:hidden; }
+    .segmented button { background:#0f1530; color:#dbe6ff; border:0; padding:6px 10px; font-weight:600; }
+    .segmented button.active { background:#1b2342; color:#fff; }
+    .chip { margin-left:6px; font-size:12px; opacity:0.9; }
+    .chip.ok { color:#7CFF86; }
+    .chip.miss { color:#FFD36E; }
+    .tiny { font-size:11px; padding:2px 6px; border-radius:8px; border:1px solid #2c3b74; background:#0b1020; color:#cfd9ff; }
+    .warntext { color:#FFD36E; font-size:12px; opacity:0.9; }
+    button, label, input[type="checkbox"] { cursor:pointer; }
+    .drop { margin-top:8px; padding:16px; border:2px dashed #2f3a66; border-radius:12px; text-align:center; color:#b8c5ff; }
+    .drop.drag { background:#0a1130; border-color:#4a61ff; }
+    .pill { display:inline-block; padding:2px 8px; border-radius:999px; background:#1b2342; border:1px solid #2c3b74; font-size:12px; }
+    .score { font-size:48px; font-weight:800; line-height:1; margin:6px 0 2px; }
+    .sub { opacity:0.8; font-size:12px; }
+    table { width:100%; border-collapse:collapse; margin-top:8px; font-size:13px; }
+    th, td { padding:6px 8px; border-bottom:1px solid #1f2a4a; }
+    .ok { color:#7CFF86; } .warn { color:#FFD36E; } .bad { color:#FF6E7A; }
+  </style>
+  <!-- MediaPipe Pose + utils via jsDelivr -->
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+</head>
+<body>
+<header>
+  <div class="controls">
+    <button id="startBtn">▶ Start Camera</button>
+    <button id="fileBtn">▶ Use Video File</button>
+    <label class="pill"><input type="checkbox" id="mirror" checked /> Mirror display</label>
+    <div class="segmented" id="viewTabs">
+      <button data-view="front" id="btnFront" class="active">Front</button>
+      <button data-view="left" id="btnLeft">Left</button>
+      <button data-view="right" id="btnRight">Right</button>
+    </div>
+    <span class="chip miss" id="chipFront">• missing <button class="tiny" id="resetFront" title="Reset front view">Reset</button></span>
+    <span class="chip miss" id="chipLeft">• missing <button class="tiny" id="resetLeft" title="Reset left view">Reset</button></span>
+    <span class="chip miss" id="chipRight">• missing <button class="tiny" id="resetRight" title="Reset right view">Reset</button></span>
+    <label class="pill"><input type="checkbox" id="oneView" /> One-view mode (front only)</label>
+  </div>
+  <input id="fileInput" type="file" accept="video/*" style="display:none" />
+</header>
+
+<div class="wrap">
+  <div class="left">
+    <div id="stage">
+      <video id="vid" playsinline muted></video>
+      <canvas id="canvas"></canvas>
+    </div>
+    <div id="drop" class="drop">Drag & drop a template JSON here (e.g., <code>…/public/templates/warrior_ii_front.json</code>)</div>
+  </div>
+
+  <div class="right">
+    <div class="sub">Active view score</div>
+    <div class="score" id="score">—</div>
+    <div class="sub" id="status">Load a template to start scoring.</div>
+    <div class="warntext" id="tplWarn" style="display:none;">No template for this view.</div>
+    <table>
+      <thead><tr><th>Joint</th><th>Δ°</th><th>Δ / tol</th></tr></thead>
+      <tbody id="jtRows"></tbody>
+    </table>
+    <div style="margin-top:10px; font-weight:700;">Per-view results</div>
+    <table>
+      <thead><tr><th>View</th><th>Best</th><th>Mean vis</th><th>Status</th></tr></thead>
+      <tbody id="perView"></tbody>
+    </table>
+    <div style="margin-top:10px; font-size:20px; font-weight:800;">Final combined score: <span id="finalScore">—</span></div>
+  </div>
+</div>
+
+<footer>
+  <div class="sub">Tips: Use a well-lit area. For <b>front</b> templates face the camera; for <b>left/right</b> templates, stand in profile with that side toward the camera.</div>
+</footer>
+
+<script>
+(() => {
+  // --- Globals
+  const video = document.getElementById('vid');
+  const canvas = document.getElementById('canvas');
+  const ctx = canvas.getContext('2d');
+  const startBtn = document.getElementById('startBtn');
+  const mirrorEl = document.getElementById('mirror');
+  const scoreEl = document.getElementById('score');
+  const statusEl = document.getElementById('status');
+  const jtRowsEl = document.getElementById('jtRows');
+  const drop = document.getElementById('drop');
+  const tplWarnEl = document.getElementById('tplWarn');
+  const perViewEl = document.getElementById('perView');
+  const finalScoreEl = document.getElementById('finalScore');
+  const oneViewEl = document.getElementById('oneView');
+  const viewTabs = document.getElementById('viewTabs');
+  const chipFront = document.getElementById('chipFront');
+  const chipLeft  = document.getElementById('chipLeft');
+  const chipRight = document.getElementById('chipRight');
+  const resetFront = document.getElementById('resetFront');
+  const resetLeft  = document.getElementById('resetLeft');
+  const resetRight = document.getElementById('resetRight');
+  const btnFront = document.getElementById('btnFront');
+  const btnLeft  = document.getElementById('btnLeft');
+  const btnRight = document.getElementById('btnRight');
+
+  let pose = null;
+  let cam = null;
+  let rafId = null;
+
+  /**
+   * type ViewKind = 'front'|'left'|'right'
+   * type ViewResult = { view: ViewKind; bestScore: number; meanVisibility: number }
+   * type Templates = Partial<Record<ViewKind, Template>>
+   * type PoseAttempt = { poseId?: string; views: Partial<Record<ViewKind, ViewResult>>; finalScore?: number }
+   * type Template = {
+   *   pose_id: string,
+   *   angles_deg: Record<string,number>,
+   *   tolerance_deg: Record<string,number>,
+   *   weights: Record<string,number>,
+   *   symmetric?: boolean,
+   *   camera_view?: 'front'|'side'
+   * }
+   */
+  /** @type {Partial<Record<'front'|'left'|'right', any>>} */
+  const templates = {};
+  /** @type {'front'|'left'|'right'} */
+  let activeView = 'front';
+  /** @type {{views: Partial<Record<'front'|'left'|'right', {view:'front'|'left'|'right', bestScore:number, meanVisibility:number}>>, finalScore?: number, poseId?: string}} */
+  const attempt = { views: {} };
+  const statePerView = attempt.views;
+
+  function updateChips(){
+    const mark = (el, has) => {
+      el.classList.toggle('ok', !!has);
+      el.classList.toggle('miss', !has);
+      el.textContent = has ? '• loaded ' : '• missing ';
+      if (el === chipFront) el.appendChild(resetFront);
+      if (el === chipLeft)  el.appendChild(resetLeft);
+      if (el === chipRight) el.appendChild(resetRight);
+    };
+    mark(chipFront, !!templates.front);
+    mark(chipLeft,  !!templates.left);
+    mark(chipRight, !!templates.right);
+  }
+
+  function setActiveView(v){
+    if (oneViewEl.checked) v = 'front';
+    activeView = v;
+    [...viewTabs.querySelectorAll('button')].forEach(b=>b.classList.toggle('active', b.dataset.view===v));
+    const hasTpl = !!templates[v];
+    tplWarnEl.style.display = hasTpl ? 'none' : '';
+    if (!hasTpl) tplWarnEl.textContent = `No template for ${v.toUpperCase()} view.`;
+  }
+
+  oneViewEl?.addEventListener('change', ()=>{
+    if (oneViewEl.checked){
+      setActiveView('front');
+      btnLeft.disabled = true; btnRight.disabled = true;
+      btnLeft.style.opacity = 0.3; btnRight.style.opacity = 0.3;
+    } else {
+      btnLeft.disabled = false; btnRight.disabled = false;
+      btnLeft.style.opacity = 1; btnRight.style.opacity = 1;
+    }
+    updateFinalScore();
+  });
+
+  viewTabs.addEventListener('click', (e)=>{
+    const b = e.target.closest('button');
+    if (!b) return;
+    setActiveView(b.dataset.view);
+  });
+  resetFront.addEventListener('click', ()=>{ delete statePerView.front; updatePerViewUI(); updateFinalScore(); });
+  resetLeft.addEventListener('click',  ()=>{ delete statePerView.left;  updatePerViewUI(); updateFinalScore(); });
+  resetRight.addEventListener('click', ()=>{ delete statePerView.right; updatePerViewUI(); updateFinalScore(); });
+
+  // --- MediaPipe Pose init
+  function createPose(onResults) {
+    // Support both older and newer UMD globals: Pose.Pose or Pose (or pose)
+    const PoseNS = window.Pose || window.pose;
+    const PoseCtor = PoseNS && (PoseNS.Pose || PoseNS);
+    if (!PoseCtor) {
+      console.error('MediaPipe Pose not found on window. Expected window.Pose or window.pose');
+      throw new Error('MediaPipe Pose library not loaded');
+    }
+    const p = new PoseCtor({
+      locateFile: (f) => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${f}`,
+    });
+    p.setOptions({
+      modelComplexity: 1, // 0 lite, 1 full, 2 heavy
+      smoothLandmarks: true,
+      minDetectionConfidence: 0.6,
+      minTrackingConfidence: 0.6,
+      // Important: we handle mirroring only in canvas rendering.
+      // Keep selfieMode false so landmarks align with the video image.
+      selfieMode: false,
+    });
+    p.onResults(onResults);
+    return p;
+  }
+
+  // --- Geometry helpers
+  const get = (lm, k) => ({ x: lm[k].x, y: lm[k].y });
+  const add = (a,b)=>({x:a.x+b.x,y:a.y+b.y});
+  const sub = (a,b)=>({x:a.x-b.x,y:a.y-b.y});
+  const mul = (a,s)=>({x:a.x*s,y:a.y*s});
+  const norm = (a)=>Math.hypot(a.x,a.y);
+
+  function normalize(lm) {
+    const lhip=get(lm,"left_hip"), rhip=get(lm,"right_hip");
+    const lsh =get(lm,"left_shoulder"), rsh=get(lm,"right_shoulder");
+    const midHip = mul(add(lhip,rhip), 0.5);
+    const scale  = Math.max(1e-6, norm(sub(lsh,lhip)));
+    const shv    = sub(rsh,lsh);
+    const theta  = Math.atan2(shv.y, shv.x);
+    const c=Math.cos(-theta), s=Math.sin(-theta);
+    const R = (p)=>({x: c*p.x - s*p.y, y: s*p.x + c*p.y});
+    const out = {};
+    for (const k in lm) {
+      const p = mul(R(sub(get(lm,k), midHip)), 1/scale);
+      out[k] = p;
+    }
+    out["mid_hip"] = {x:0,y:0};
+    return out;
+  }
+
+  function angle3(a,b,c){
+    const BA=sub(a,b), BC=sub(c,b);
+    const denom = (norm(BA)*norm(BC) + 1e-6);
+    const cosv = Math.max(-1, Math.min(1, (BA.x*BC.x+BA.y*BC.y)/denom));
+    return Math.acos(cosv)*180/Math.PI;
+  }
+
+  function extractAngles(norm) {
+    const j=(a,b,c)=>angle3(norm[a],norm[b],norm[c]);
+    const A = {
+      left_elbow:    j("left_shoulder","left_elbow","left_wrist"),
+      right_elbow:   j("right_shoulder","right_elbow","right_wrist"),
+      left_knee:     j("left_hip","left_knee","left_ankle"),
+      right_knee:    j("right_hip","right_knee","right_ankle"),
+      left_shoulder: j("left_elbow","left_shoulder","left_hip"),
+      right_shoulder:j("right_elbow","right_shoulder","right_hip"),
+      left_hip:      j("left_shoulder","left_hip","left_knee"),
+      right_hip:     j("right_shoulder","right_hip","right_knee"),
+    };
+    const shMid = {x:(norm["left_shoulder"].x+norm["right_shoulder"].x)/2,
+                   y:(norm["left_shoulder"].y+norm["right_shoulder"].y)/2};
+    const v = sub(shMid, (norm)["mid_hip"]);
+    const spine = (Math.atan2(v.y,v.x)*180/Math.PI + 360) % 180;
+    A["spine_tilt"] = Math.abs(spine - 90);
+    return A;
+  }
+
+  const wrapDiff = (a,b)=>Math.min(Math.abs(a-b), 360-Math.abs(a-b));
+
+  // Visibility gating map
+  const JOINT_LM = {
+    left_elbow: ["left_shoulder","left_elbow","left_wrist"],
+    right_elbow:["right_shoulder","right_elbow","right_wrist"],
+    left_knee:  ["left_hip","left_knee","left_ankle"],
+    right_knee: ["right_hip","right_knee","right_ankle"],
+    left_shoulder:["left_elbow","left_shoulder","left_hip"],
+    right_shoulder:["right_elbow","right_shoulder","right_hip"],
+    left_hip:   ["left_shoulder","left_hip","left_knee"],
+    right_hip:  ["right_shoulder","right_hip","right_knee"],
+    spine_tilt: ["left_shoulder","right_shoulder","left_hip","right_hip"],
+  };
+  const visOKNames = (names, visibility) => names.every(n => (visibility[n] ?? 1) >= 0.5);
+
+  // 2.2 Angle smoothing buffer (median of last N frames)
+  const buffers = new Map(); // joint -> number[]
+  const pushSmooth = (k, v, N=7) => {
+    const arr = buffers.get(k) || [];
+    arr.push(v); if (arr.length > N) arr.shift();
+    buffers.set(k, arr);
+    const sorted = [...arr].sort((a,b)=>a-b);
+    const m = sorted.length ? sorted[(sorted.length-1)>>1] : v;
+    return m;
+  };
+
+  // Scoring with visibility gating, trim-worst, and non-linear display
+  function scoreAngles(userAngles, tpl, visibility){
+    const ref = tpl.angles_deg, tol = tpl.tolerance_deg, W = tpl.weights || {};
+    const rows = []; // [joint, diffDeg, normErr(0..1), tolDeg, weight]
+    for (const k in ref){
+      if (!(k in userAngles)) continue;
+      const lmNames = JOINT_LM[k] || [];
+      if (lmNames.length && !visOKNames(lmNames, visibility)) continue;
+      const diff = Math.min(Math.abs(userAngles[k] - ref[k]), 360 - Math.abs(userAngles[k] - ref[k]));
+      const t = Math.max(1e-6, tol?.[k] ?? 12);
+      const w = W?.[k] ?? 1;
+      const normd = Math.min(diff / t, 1);
+      rows.push([k, diff, normd, t, w]);
+    }
+    if (!rows.length) return { score: 0, rows };
+    rows.sort((a,b)=> b[2] - a[2]);
+    const used = rows.slice(1);
+    let num=0, den=0;
+    used.forEach(([_, __, n, ___, w]) => { num += n*w; den += w; });
+    const mae = den ? num/den : 1;
+    const sRaw = Math.max(0, 1 - mae);
+    const sDisp = Math.pow(sRaw, 0.6);
+    const score = Math.round(100 * sDisp);
+    return { score, rows };
+  }
+
+  function meanScoredVisibility(visibility, tpl){
+    const ks = Object.keys(tpl.weights || {}).filter(k => (tpl.weights[k] ?? 0) > 0);
+    const all = ks.flatMap(k => JOINT_LM[k] || []);
+    const vals = all.map(n => visibility[n] ?? 0).filter(v => v > 0);
+    if (!vals.length) return 0;
+    return vals.reduce((a,b)=>a+b,0) / vals.length;
+  }
+
+  function aggregateViews(viewsObj){
+    const arr = Object.values(viewsObj).filter(Boolean);
+    if (!arr.length) return 0;
+    if (arr.length === 1) return Math.round(arr[0].bestScore);
+    const ranked = arr.map(v => ({...v, eff: v.bestScore * Math.max(0.01, v.meanVisibility)})).sort((a,b)=> b.eff - a.eff);
+    const top = ranked.slice(0, Math.min(2, ranked.length));
+    const num = top.reduce((s,v)=> s + v.bestScore * v.meanVisibility, 0);
+    const den = top.reduce((s,v)=> s + v.meanVisibility, 0);
+    return Math.round( den ? (num/den) : top[0].bestScore );
+  }
+
+  function updatePerViewUI(){
+    const fmt = v => v[0].toUpperCase()+v.slice(1);
+    const row = v => {
+      const r = statePerView[v];
+      const best = r ? Math.round(r.bestScore) : '—';
+      const mv = r ? r.meanVisibility.toFixed(2) : '—';
+      const status = r ? 'Recorded' : 'Not recorded';
+      return `<tr><td>${fmt(v)}</td><td>${best}</td><td>${mv}</td><td>${status}</td></tr>`;
+    };
+    perViewEl.innerHTML = row('front') + row('left') + row('right');
+  }
+
+  function updateFinalScore(){
+    const viewsObj = oneViewEl.checked ? (statePerView.front ? { front: statePerView.front } : {}) : statePerView;
+    attempt.finalScore = aggregateViews(viewsObj);
+    finalScoreEl.textContent = (viewsObj && Object.keys(viewsObj).length) ? String(attempt.finalScore) : '—';
+  }
+
+  function jointColor(normd){
+    if (normd <= 1.0) return "rgba(124,255,134,0.95)";   // green
+    if (normd <= 2.0) return "rgba(255,211,110,0.95)";   // yellow
+    return "rgba(255,110,122,0.95)";                     // red
+  }
+
+  // --- Mapping indices to names (MediaPipe standard order)
+  const NAME_BY_IDX = [
+    "nose","left_eye_inner","left_eye","left_eye_outer","right_eye_inner","right_eye","right_eye_outer",
+    "left_ear","right_ear","mouth_left","mouth_right","left_shoulder","right_shoulder","left_elbow",
+    "right_elbow","left_wrist","right_wrist","left_pinky","right_pinky","left_index","right_index",
+    "left_thumb","right_thumb","left_hip","right_hip","left_knee","right_knee","left_ankle","right_ankle",
+    "left_heel","right_heel","left_foot_index","right_foot_index"
+  ];
+
+  // --- Main onResults
+  function onResults(res){
+    const vw = video.videoWidth || 1280;
+    const vh = video.videoHeight || 720;
+    canvas.width = vw; canvas.height = vh;
+
+    ctx.save();
+    if (mirrorEl.checked) { ctx.translate(vw,0); ctx.scale(-1,1); }
+    ctx.drawImage(video, 0, 0, vw, vh);
+
+    if (!res.poseLandmarks) {
+      statusEl.textContent = "No landmarks detected…";
+      ctx.restore();
+      return;
+    }
+
+    // Build named landmarks map in normalized space and capture visibility
+    const lm = {};
+    const vis = {};
+    res.poseLandmarks.forEach((lmv, i) => {
+      const name = NAME_BY_IDX[i] || `lm${i}`;
+      lm[name] = { x: lmv.x, y: lmv.y }; // normalized (0..1)
+      vis[name] = lmv.visibility ?? 1;
+    });
+    // visibility checked per-joint in scoring
+
+    // Compute score if template for active view is loaded
+    let displayScore = "—";
+    const currentTemplate = templates[activeView];
+    tplWarnEl.style.display = currentTemplate ? 'none' : '';
+    if (currentTemplate){
+      const normed = normalize(lm);
+      const angles = extractAngles(normed);
+
+      // Angle smoothing: median of last 7 frames per joint
+      for (const k in angles) angles[k] = pushSmooth(k, angles[k], 7);
+      const {score, rows} = scoreAngles(angles, currentTemplate, vis);
+      displayScore = score.toFixed(0);
+
+      // Draw joints colored by error
+      // We color main segments using per-joint normalized error where possible
+      const normByJoint = {};
+      rows.forEach(([k, diff, normd]) => normByJoint[k]=normd);
+
+      const segs = [
+        ["left_shoulder","right_shoulder"],
+        ["left_shoulder","left_elbow"], ["left_elbow","left_wrist"],
+        ["right_shoulder","right_elbow"], ["right_elbow","right_wrist"],
+        ["left_shoulder","left_hip"], ["right_shoulder","right_hip"],
+        ["left_hip","left_knee"], ["left_knee","left_ankle"],
+        ["right_hip","right_knee"], ["right_knee","right_ankle"]
+      ];
+      ctx.lineWidth = 6;
+      segs.forEach(([a,b])=>{
+        const A = lm[a], B = lm[b];
+        if (!A || !B) return;
+        // choose a color based on the joint at the distal end if we have it
+        const keyGuess = a.includes("elbow")||b.includes("elbow") ? (a.includes("elbow")? "left_elbow":"right_elbow")
+                        : a.includes("knee")||b.includes("knee") ? (a.includes("knee")? "left_knee":"right_knee")
+                        : a.includes("shoulder")||b.includes("shoulder") ? (a.includes("shoulder")? "left_shoulder":"right_shoulder")
+                        : "spine_tilt";
+        const nd = normByJoint[keyGuess] ?? 0;
+        ctx.strokeStyle = jointColor(nd);
+        ctx.beginPath();
+        ctx.moveTo(A.x*vw, A.y*vh);
+        ctx.lineTo(B.x*vw, B.y*vh);
+        ctx.stroke();
+      });
+
+      // Update sidebar table
+      jtRowsEl.innerHTML = rows
+        .sort((a,b)=>b[1]-a[1]) // biggest errors first
+        .map(([k, diff, normd, t])=>{
+          const cls = normd<=1 ? "ok" : (normd<=2 ? "warn" : "bad");
+          return `<tr><td>${k}</td><td class="${cls}">${diff.toFixed(1)}°</td><td class="${cls}">${normd.toFixed(2)} / ${t.toFixed(1)}</td></tr>`;
+        }).join("");
+
+      // Update per-view best tracking and aggregate
+      const mv = meanScoredVisibility(vis, currentTemplate);
+      const prev = statePerView[activeView];
+      if (!prev || score > prev.bestScore){
+        statePerView[activeView] = { view: activeView, bestScore: score, meanVisibility: mv };
+        updatePerViewUI();
+        updateFinalScore();
+      }
+    }
+
+    // Score text
+    scoreEl.textContent = displayScore;
+
+    ctx.restore();
+  }
+
+  // --- Start camera
+  startBtn.addEventListener('click', async () => {
+    if (!pose) pose = createPose(onResults);
+    try {
+      // stop any prior RAF/file playback
+      if (rafId) { cancelAnimationFrame(rafId); rafId = null; }
+      if (cam && cam.stop) { try { cam.stop(); } catch(_){} }
+      const stream = await navigator.mediaDevices.getUserMedia({ video: { width:1280, height:720 }, audio:false });
+      video.srcObject = stream;
+      video.src = "";
+      await video.play();
+      // Support both Camera.Camera and Camera (or cameraUtils)
+      const CamNS = window.Camera || window.cameraUtils;
+      const CameraCtor = CamNS && (CamNS.Camera || CamNS);
+      if (!CameraCtor) {
+        // Fallback to RAF loop if camera utils missing
+        const step = async () => {
+          await pose.send({ image: video });
+          rafId = requestAnimationFrame(step);
+        };
+        rafId = requestAnimationFrame(step);
+      } else {
+        cam = new CameraCtor(video, {
+          onFrame: async () => { await pose.send({ image: video }); },
+          width: 1280, height: 720
+        });
+        cam.start();
+      }
+      statusEl.textContent = "Camera running. Load a template JSON to start scoring.";
+    } catch (err) {
+      console.error(err);
+      const msg = err && err.name === 'NotFoundError' ? 'No camera found.'
+                : err && err.name === 'NotAllowedError' ? 'Camera permission denied.'
+                : 'Unable to access camera.';
+      statusEl.textContent = `${msg} You can use a video file instead.`;
+      alert(`${msg} Choose a video file to process.`);
+    }
+  });
+
+  // --- Process a local video file (fallback if no camera)
+  const fileBtn = document.getElementById('fileBtn');
+  const fileInput = document.getElementById('fileInput');
+  fileBtn.addEventListener('click', () => fileInput.click());
+  fileInput.addEventListener('change', async (e) => {
+    const f = e.target.files && e.target.files[0];
+    if (!f) return;
+    try {
+      if (!pose) pose = createPose(onResults);
+      // stop any existing camera stream/loop
+      if (cam && cam.stop) { try { cam.stop(); } catch(_){} }
+      if (rafId) { cancelAnimationFrame(rafId); rafId = null; }
+      const url = URL.createObjectURL(f);
+      video.srcObject = null;
+      video.src = url;
+      await video.play();
+      statusEl.textContent = "Playing local video. Load a template JSON to start scoring.";
+      const step = async () => {
+        // Only send frames when video has data
+        if (video.readyState >= 2) {
+          await pose.send({ image: video });
+        }
+        if (!video.ended && !video.paused) {
+          rafId = requestAnimationFrame(step);
+        }
+      };
+      rafId = requestAnimationFrame(step);
+    } catch (err) {
+      console.error(err);
+      statusEl.textContent = 'Failed to play selected video.';
+    }
+  });
+
+  // --- Template drag & drop
+  const stopEv = e => { e.preventDefault(); e.stopPropagation(); };
+  ["dragenter","dragover","dragleave","drop"].forEach(ev => drop.addEventListener(ev, stopEv));
+  ["dragenter","dragover"].forEach(ev => drop.addEventListener(ev, ()=>drop.classList.add('drag')));
+  ["dragleave","drop"].forEach(ev => drop.addEventListener(ev, ()=>drop.classList.remove('drag')));
+  function detectViewFromName(name){
+    const s = String(name || '').toLowerCase();
+    if (/_front/.test(s)) return 'front';
+    if (/_left/.test(s)) return 'left';
+    if (/_right/.test(s)) return 'right';
+    return null;
+  }
+
+  drop.addEventListener('drop', (e)=>{
+    const file = e.dataTransfer.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const tpl = JSON.parse(String(reader.result));
+        const poseId = tpl.pose_id || '';
+        const v = detectViewFromName(poseId) || detectViewFromName(file.name) || 'front';
+        templates[v] = tpl;
+        attempt.poseId = attempt.poseId || tpl.pose_id;
+        updateChips();
+        statusEl.textContent = `Template loaded for ${v.toUpperCase()} view.`;
+        if (!oneViewEl.checked) setActiveView(v);
+      } catch (err) {
+        alert('Invalid JSON template.');
+      }
+    };
+    reader.readAsText(file);
+  });
+
+  // Init UI state
+  updateChips();
+  setActiveView('front');
+  updatePerViewUI();
+  updateFinalScore();
+
+})();
+</script>
+</body>
+</html>
