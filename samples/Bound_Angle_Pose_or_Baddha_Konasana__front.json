@@ -1,0 +1,93 @@
+{
+  "pose_id": "Bound_Angle_Pose_or_Baddha_Konasana_",
+  "angles_deg": {
+    "left_elbow": 162.39999389648438,
+    "left_hip": 111.4000015258789,
+    "left_knee": 87.0999984741211,
+    "left_shoulder": 9.600000381469727,
+    "right_elbow": 163.3000030517578,
+    "right_hip": 110.5999984741211,
+    "right_knee": 74.5999984741211,
+    "right_shoulder": 9.899999618530273,
+    "spine_tilt": 2.4000000953674316
+  },
+  "tolerance_deg": {
+    "left_elbow": 23.9,
+    "right_elbow": 25.0,
+    "left_knee": 25.0,
+    "right_knee": 25.0,
+    "left_shoulder": 21.1,
+    "right_shoulder": 17.9,
+    "left_hip": 25.0,
+    "right_hip": 25.0,
+    "spine_tilt": 10.0
+  },
+  "weights": {
+    "left_elbow": 1.0,
+    "left_hip": 1.4,
+    "left_knee": 1.4,
+    "left_shoulder": 1.4,
+    "right_elbow": 1.0,
+    "right_hip": 1.4,
+    "right_knee": 1.4,
+    "right_shoulder": 1.4,
+    "spine_tilt": 1.2
+  },
+  "symmetric": false,
+  "camera_view": "front",
+  "selection": "majority_cluster_medoid",
+  "landmarks": {
+    "left_shoulder": {
+      "x": -0.5559642910957336,
+      "y": 0.9709279537200928
+    },
+    "right_shoulder": {
+      "x": 0.5162743926048279,
+      "y": 0.9709279537200928
+    },
+    "left_elbow": {
+      "x": -0.5948913097381592,
+      "y": 0.1836940199136734
+    },
+    "right_elbow": {
+      "x": 0.5329516530036926,
+      "y": 0.19707134366035461
+    },
+    "left_wrist": {
+      "x": -0.3395555913448334,
+      "y": -0.4056251347064972
+    },
+    "right_wrist": {
+      "x": 0.3509863317012787,
+      "y": -0.40515774488449097
+    },
+    "left_hip": {
+      "x": -0.3619150221347809,
+      "y": -0.010060276836156845
+    },
+    "right_hip": {
+      "x": 0.3619149327278137,
+      "y": 0.010060274042189121
+    },
+    "left_knee": {
+      "x": -0.21044285595417023,
+      "y": -0.04283592849969864
+    },
+    "right_knee": {
+      "x": 0.8952943086624146,
+      "y": 0.021228184923529625
+    },
+    "left_ankle": {
+      "x": -0.34483256936073303,
+      "y": -0.5625910758972168
+    },
+    "right_ankle": {
+      "x": 0.6012265682220459,
+      "y": -0.5056365728378296
+    },
+    "mid_hip": {
+      "x": 0.0,
+      "y": 0.0
+    }
+  }
+}

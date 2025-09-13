@@ -10,15 +10,19 @@ import { Pose, POSE_CONNECTIONS } from "@mediapipe/pose";
 import { Camera as MediaPipeCamera } from "@mediapipe/camera_utils";
 
 /**
- * WorkoutSession
- * - Live MediaPipe Pose from webcam
- * - Scores user vs. current template with robust pipeline:
+ * WorkoutSession — ALL improvements:
+ * - Robust angle-based scoring:
  *    • normalization (translate/scale/rotate)
- *    • angle extraction incl. spine_tilt
- *    • visibility gating & joint weighting
- *    • per-joint angle smoothing (median over last N frames)
- *    • trim worst joint, non-linear top-end lift
- * - Draws color-coded skeleton by error
+ *    • angles incl. spine_tilt
+ *    • visibility gating
+ *    • per-joint median smoothing (N=7)
+ *    • trim worst joint
+ *    • non-linear top-end lift
+ * - Hybrid similarity (optional when template.landmarks present):
+ *    • bone-vector cosine similarity
+ *    • pose embedding (coords+unit bones) distance → similarity
+ *    • blended final score: 0.60*angles + 0.25*bones + 0.15*embed
+ * - Color-coded skeleton by per-joint error
  *
  * Expected location.state:
  * {
@@ -27,8 +31,10 @@ import { Camera as MediaPipeCamera } from "@mediapipe/camera_utils";
  *     angles_deg: Record<string, number>,
  *     tolerance_deg: Record<string, number>,
  *     weights: Record<string, number>,
- *     camera_view?: "front" | "side"
- *     // (optional) landmarks/image preview not required
+ *     camera_view?: "front" | "side",
+ *     // OPTIONAL normalized template landmarks:
+ *     //  either as name→{x,y} object (builder output) OR index-array [{x,y}, ...]
+ *     landmarks?: Record<string, {x:number,y:number}> | Array<{x:number,y:number}>
  *   }>
  * }
  */
@@ -69,6 +75,27 @@ const L = {
   LEFT_FOOT_INDEX: 31,
   RIGHT_FOOT_INDEX: 32,
 } as const;
+
+// Name → index (to consume builder JSON landmarks keyed by names)
+const NAME_TO_INDEX: Record<string, number> = {
+  left_shoulder: L.LEFT_SHOULDER,
+  right_shoulder: L.RIGHT_SHOULDER,
+  left_elbow: L.LEFT_ELBOW,
+  right_elbow: L.RIGHT_ELBOW,
+  left_wrist: L.LEFT_WRIST,
+  right_wrist: L.RIGHT_WRIST,
+  left_hip: L.LEFT_HIP,
+  right_hip: L.RIGHT_HIP,
+  left_knee: L.LEFT_KNEE,
+  right_knee: L.RIGHT_KNEE,
+  left_ankle: L.LEFT_ANKLE,
+  right_ankle: L.RIGHT_ANKLE,
+  left_heel: L.LEFT_HEEL,
+  right_heel: L.RIGHT_HEEL,
+  left_foot_index: L.LEFT_FOOT_INDEX,
+  right_foot_index: L.RIGHT_FOOT_INDEX,
+  // In builder JSON we also export "mid_hip" but it's synthetic; we recompute locally.
+};
 
 // ---- Joints & required landmarks for visibility gating ----
 const JOINT_LM: Record<string, number[]> = {
@@ -182,12 +209,124 @@ function useAngleSmoother(N = 7) {
 const visOK = (names: number[], vis: number[], thresh = 0.5) =>
   names.every((i) => (vis[i] ?? 0) >= thresh);
 
-// ---- Draw skeleton with color by per-joint error ----
+// ======================= HYBRID SIMILARITY HELPERS =======================
+
+// Bone list for orientation similarity
+const BONES: Array<[number, number]> = [
+  [L.LEFT_SHOULDER, L.LEFT_ELBOW],
+  [L.RIGHT_SHOULDER, L.RIGHT_ELBOW],
+  [L.LEFT_ELBOW, L.LEFT_WRIST],
+  [L.RIGHT_ELBOW, L.RIGHT_WRIST],
+  [L.LEFT_HIP, L.LEFT_KNEE],
+  [L.RIGHT_HIP, L.RIGHT_KNEE],
+  [L.LEFT_KNEE, L.LEFT_ANKLE],
+  [L.RIGHT_KNEE, L.RIGHT_ANKLE],
+  [L.LEFT_SHOULDER, L.LEFT_HIP],
+  [L.RIGHT_SHOULDER, L.RIGHT_HIP],
+];
+
+const unitVec = (a: { x: number; y: number }, b: { x: number; y: number }) => {
+  const vx = b.x - a.x,
+    vy = b.y - a.y;
+  const n = Math.hypot(vx, vy) || 1e-6;
+  return { x: vx / n, y: vy / n };
+};
+
+function boneCosineScore(
+  normUser: Record<string, { x: number; y: number }>,
+  normTpl: Record<string, { x: number; y: number }>,
+  visibility: number[]
+) {
+  const cosines: number[] = [];
+  for (const [i, j] of BONES) {
+    const ok = (visibility[i] ?? 1) >= 0.5 && (visibility[j] ?? 1) >= 0.5;
+    if (!ok || !normUser[i] || !normUser[j] || !normTpl[i] || !normTpl[j])
+      continue;
+    const u = unitVec(normUser[i], normUser[j]);
+    const v = unitVec(normTpl[i], normTpl[j]);
+    const cos = Math.max(-1, Math.min(1, u.x * v.x + u.y * v.y));
+    cosines.push(Math.max(0, cos)); // clamp to [0,1]
+  }
+  if (!cosines.length) return 0;
+  return 100 * (cosines.reduce((s, c) => s + c, 0) / cosines.length);
+}
+
+const EMB_KEYS = [
+  L.LEFT_SHOULDER,
+  L.RIGHT_SHOULDER,
+  L.LEFT_HIP,
+  L.RIGHT_HIP,
+  L.LEFT_ELBOW,
+  L.RIGHT_ELBOW,
+  L.LEFT_KNEE,
+  L.RIGHT_KNEE,
+  L.LEFT_WRIST,
+  L.RIGHT_WRIST,
+  L.LEFT_ANKLE,
+  L.RIGHT_ANKLE,
+];
+
+function embedPose(norm: Record<string, { x: number; y: number }>) {
+  const shL = norm[L.LEFT_SHOULDER],
+    shR = norm[L.RIGHT_SHOULDER];
+  if (!shL || !shR) return [];
+  const base = { x: (shL.x + shR.x) / 2, y: (shL.y + shR.y) / 2 };
+  const v: number[] = [];
+  for (const k of EMB_KEYS) {
+    const p = norm[k];
+    if (!p) return [];
+    v.push(p.x - base.x, p.y - base.y);
+  }
+  for (const [i, j] of BONES) {
+    const u = unitVec(norm[i], norm[j]);
+    v.push(u.x, u.y);
+  }
+  return v;
+}
+
+function similarityEmbed(u: number[], t: number[]) {
+  if (!u.length || u.length !== t.length) return 0;
+  let d2 = 0;
+  for (let i = 0; i < u.length; i++) {
+    const d = u[i] - t[i];
+    d2 += d * d;
+  }
+  const d = Math.sqrt(d2);
+  const scale = Math.sqrt(u.length) * 0.15; // soft margin
+  const s = Math.max(0, 1 - d / (scale + 1e-6)); // 0..1
+  return 100 * s;
+}
+
+// Build a 33-length array from template.landmarks that could be name→{x,y} or array
+function coerceTemplateLandmarks(
+  lm:
+    | Record<string, { x: number; y: number }>
+    | Array<{ x: number; y: number }>
+    | undefined
+): Pt[] | null {
+  if (!lm) return null;
+  const out: Pt[] = new Array(33).fill(null) as any;
+  if (Array.isArray(lm)) {
+    // assume already index-aligned
+    for (let i = 0; i < Math.min(33, lm.length); i++) {
+      const p = lm[i];
+      if (p) out[i] = { x: p.x, y: p.y };
+    }
+  } else {
+    for (const [name, idx] of Object.entries(NAME_TO_INDEX)) {
+      const p = (lm as any)[name];
+      if (p) out[idx] = { x: p.x, y: p.y };
+    }
+  }
+  return out;
+}
+
+// ======================= DRAWING =======================
 function drawSkeletonColored(
   ctx: CanvasRenderingContext2D,
   lm: Pt[],
   connections: Array<[number, number]>,
-  jointErr: Record<string, number> // normalized error 0..1 per major joint
+  jointErr: Record<string, number> // normalized error
 ) {
   const W = ctx.canvas.width,
     H = ctx.canvas.height;
@@ -200,24 +339,14 @@ function drawSkeletonColored(
   };
 
   const segToKey = (a: number, b: number) => {
-    const sA =
-      [L.LEFT_ELBOW, L.RIGHT_ELBOW].includes(a as any) ||
-      [L.LEFT_ELBOW, L.RIGHT_ELBOW].includes(b as any)
-        ? a === L.LEFT_ELBOW || b === L.LEFT_ELBOW
-          ? "left_elbow"
-          : "right_elbow"
-        : [L.LEFT_KNEE, L.RIGHT_KNEE].includes(a as any) ||
-          [L.LEFT_KNEE, L.RIGHT_KNEE].includes(b as any)
-        ? a === L.LEFT_KNEE || b === L.LEFT_KNEE
-          ? "left_knee"
-          : "right_knee"
-        : [L.LEFT_SHOULDER, L.RIGHT_SHOULDER].includes(a as any) ||
-          [L.LEFT_SHOULDER, L.RIGHT_SHOULDER].includes(b as any)
-        ? a === L.LEFT_SHOULDER || b === L.LEFT_SHOULDER
-          ? "left_shoulder"
-          : "right_shoulder"
-        : "spine_tilt";
-    return sA;
+    if (a === L.LEFT_ELBOW || b === L.LEFT_ELBOW) return "left_elbow";
+    if (a === L.RIGHT_ELBOW || b === L.RIGHT_ELBOW) return "right_elbow";
+    if (a === L.LEFT_KNEE || b === L.LEFT_KNEE) return "left_knee";
+    if (a === L.RIGHT_KNEE || b === L.RIGHT_KNEE) return "right_knee";
+    if (a === L.LEFT_SHOULDER || b === L.LEFT_SHOULDER) return "left_shoulder";
+    if (a === L.RIGHT_SHOULDER || b === L.RIGHT_SHOULDER)
+      return "right_shoulder";
+    return "spine_tilt";
   };
 
   ctx.lineWidth = 6;
@@ -233,7 +362,7 @@ function drawSkeletonColored(
   });
 }
 
-// ---- Robust scoring (visibility gating, trim worst, non-linear top end) ----
+// ======================= ANGLE SCORING =======================
 function scoreAgainstTemplate(
   userAngles: Record<string, number>,
   tpl: any,
@@ -268,12 +397,9 @@ function scoreAgainstTemplate(
   let num = 0,
     den = 0;
   used.forEach(([, , n, , w]) => {
-    // soft visibility-based weight tweak (keep 0.6..1.0)
-    const lmReq = JOINT_LM[rows[0][0]]; // not perfect mapping per-row, OK for live preview
-    const vmin = lmReq ? Math.min(...lmReq.map((i) => visibility[i] ?? 1)) : 1;
-    const wEff = w * (0.6 + 0.4 * Math.max(0, Math.min(1, vmin)));
-    num += n * wEff;
-    den += wEff;
+    // note: we could tweak by per-row visibility; keeping stable per simplicity
+    num += n * w;
+    den += w;
   });
 
   const mae = den ? num / den : 1;
@@ -286,7 +412,7 @@ function scoreAgainstTemplate(
   return { score, rows, jointErr };
 }
 
-// === Main Component ===
+// ======================= MAIN COMPONENT =======================
 const WorkoutSession = () => {
   const navigate = useNavigate();
   const location = useLocation();
@@ -306,7 +432,13 @@ const WorkoutSession = () => {
   // Per-joint smoother
   const { push: smoothAngle, reset: resetSmoother } = useAngleSmoother(7);
 
-  // Remember last template (for UI header)
+  // Cache of normalized template shape & embedding (if landmarks provided)
+  const tplShapeRef = useRef<{
+    poseId?: string;
+    normTpl?: Record<string, { x: number; y: number }>;
+    embTpl?: number[];
+  }>({});
+
   const currentTemplate = useMemo(
     () => sessionData?.templates?.[currentStep],
     [sessionData, currentStep]
@@ -326,36 +458,56 @@ const WorkoutSession = () => {
     return () => clearInterval(id);
   }, [sessionData, resetSmoother]);
 
-  // Draw a basic stick template if landmarks preview provided (optional)
+  // Prepare & draw template preview; cache template shape/embedding if landmarks exist
   useEffect(() => {
     const canvas = templateCanvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
+
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
     const t = currentTemplate;
-    if (!t?.landmarks) return;
+    // Reset cache unless we set below
+    tplShapeRef.current = {};
 
-    // Expect t.landmarks as array of {x,y}
-    ctx.strokeStyle = "#6b7280";
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    (POSE_CONNECTIONS as any as Array<[number, number]>).forEach(([i, j]) => {
-      const a = t.landmarks[i];
-      const b = t.landmarks[j];
-      if (!a || !b) return;
-      ctx.moveTo(a.x * canvas.width, a.y * canvas.height);
-      ctx.lineTo(b.x * canvas.width, b.y * canvas.height);
-    });
-    ctx.stroke();
+    // Draw preview if landmarks provided
+    if (t?.landmarks) {
+      const lmArr = coerceTemplateLandmarks(t.landmarks);
+      if (lmArr) {
+        // cache a normalized template skeleton & its embedding
+        const norm = normalizeXY(lmArr);
+        if (norm) {
+          tplShapeRef.current = {
+            poseId: t.pose_id,
+            normTpl: norm,
+            embTpl: embedPose(norm),
+          };
+        }
 
-    ctx.fillStyle = "#9ca3af";
-    for (const p of t.landmarks) {
-      if (!p) continue;
-      ctx.beginPath();
-      ctx.arc(p.x * canvas.width, p.y * canvas.height, 3, 0, Math.PI * 2);
-      ctx.fill();
+        // Draw the provided landmarks directly (assumed 0..1 normalized)
+        ctx.strokeStyle = "#6b7280";
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        (POSE_CONNECTIONS as any as Array<[number, number]>).forEach(
+          ([i, j]) => {
+            const a = lmArr[i];
+            const b = lmArr[j];
+            if (!a || !b) return;
+            ctx.moveTo(a.x * canvas.width, a.y * canvas.height);
+            ctx.lineTo(b.x * canvas.width, b.y * canvas.height);
+          }
+        );
+        ctx.stroke();
+
+        ctx.fillStyle = "#9ca3af";
+        for (const p of lmArr) {
+          if (!p) continue;
+          ctx.beginPath();
+          ctx.arc(p.x * canvas.width, p.y * canvas.height, 3, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
     }
   }, [currentTemplate]);
 
@@ -411,13 +563,13 @@ const WorkoutSession = () => {
         return;
       }
 
-      // Gather visibility as array by index
+      // Visibility array
       const visibility: number[] = Array(33).fill(1);
       for (let i = 0; i < lm.length; i++) {
         visibility[i] = lm[i]?.visibility ?? 1;
       }
 
-      // Normalize → angles → smooth per joint
+      // Normalize → angles → smoothing
       const norm = normalizeXY(lm);
       if (!norm) {
         ctx.restore();
@@ -429,31 +581,50 @@ const WorkoutSession = () => {
         angles[k] = smoothAngle(k, rawAngles[k]);
       }
 
-      // Score
+      // --- Angle score
       const {
-        score: s,
+        score: sAngle,
         rows,
         jointErr,
       } = scoreAgainstTemplate(angles, currentTemplate, visibility);
-      if (s != null) setScore(s);
 
-      // Feedback (simple)
+      // --- Optional hybrid scores if template landmarks available
+      let sBone = 0,
+        sEmbed = 0;
+      const tplShape = tplShapeRef.current;
+      if (tplShape.poseId === currentTemplate.pose_id && tplShape.normTpl) {
+        sBone = boneCosineScore(norm, tplShape.normTpl, visibility);
+        const embUser = embedPose(norm);
+        if (tplShape.embTpl && embUser.length) {
+          sEmbed = similarityEmbed(embUser, tplShape.embTpl);
+        }
+      }
+
+      // Blend (angles dominate). If angle score missing, fall back to others.
+      let finalScore: number | null = null;
+      if (sAngle != null) {
+        finalScore = Math.round(0.6 * sAngle + 0.25 * sBone + 0.15 * sEmbed);
+      } else if (sBone || sEmbed) {
+        finalScore = Math.round(0.65 * sBone + 0.35 * sEmbed);
+      }
+      setScore(finalScore);
+
+      // Feedback (simple, driven by angles)
       if (rows.length) {
         const worst = [...rows].sort((a, b) => b[2] - a[2])[0]; // [joint, diff, norm, tol, w]
-        const [joint, diff, norm, tol] = worst;
-        const pct = Math.min(100, Math.round((diff / tol) * 100));
+        const [joint, diff, normErr, tol] = worst;
         setFeedback(
-          norm <= 1
+          normErr <= 1
             ? "Nice! Hold steady…"
             : `Adjust ${joint.replace("_", " ")} ~${Math.round(
                 diff
               )}° (within ${Math.round(tol)}°)`
         );
       } else {
-        setFeedback("Find the camera and stand tall. :)");
+        setFeedback("Find the camera and stand tall. 🙂");
       }
 
-      // Draw skeleton color-coded by error
+      // Draw skeleton color-coded by ANGLE error (intuitive)
       drawSkeletonColored(ctx, lm, POSE_CONNECTIONS as any, jointErr);
 
       ctx.restore();
@@ -503,11 +674,11 @@ const WorkoutSession = () => {
 
         {/* 2 columns */}
         <div className="grid lg:grid-cols-2 gap-6 mb-6">
-          {/* Left: Template skeleton (if any preview provided) */}
+          {/* Left: Template skeleton (if preview provided) */}
           <Card>
             <CardHeader>
               <CardTitle>
-                Template Pose ({currentStep + 1}/
+                Template Pose ({(currentStep + 1).toString()}/
                 {sessionData?.templates?.length || 0})
               </CardTitle>
             </CardHeader>
@@ -553,7 +724,7 @@ const WorkoutSession = () => {
               </h3>
               <p className="opacity-80">Form Accuracy</p>
               <p className="text-xs mt-2 opacity-70">
-                (Visibility-gated, smoothed, trim-worst, non-linear)
+                Angles (gated, smoothed) + Bones + Embedding
               </p>
             </CardContent>
           </Card>
