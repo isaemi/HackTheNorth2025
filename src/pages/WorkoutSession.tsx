@@ -94,7 +94,7 @@ const NAME_TO_INDEX: Record<string, number> = {
   right_heel: L.RIGHT_HEEL,
   left_foot_index: L.LEFT_FOOT_INDEX,
   right_foot_index: L.RIGHT_FOOT_INDEX,
-  // In builder JSON we also export "mid_hip" but it's synthetic; we recompute locally.
+  // "mid_hip" is synthetic; recomputed locally.
 };
 
 // ---- Joints & required landmarks for visibility gating ----
@@ -109,6 +109,88 @@ const JOINT_LM: Record<string, number[]> = {
   right_hip: [L.RIGHT_SHOULDER, L.RIGHT_HIP, L.RIGHT_KNEE],
   spine_tilt: [L.LEFT_SHOULDER, L.RIGHT_SHOULDER, L.LEFT_HIP, L.RIGHT_HIP],
 };
+
+// ---------- Template preview projection helpers ----------
+type XY = { x: number; y: number };
+
+function detectCanonicalSpace(points: XY[]): "canonical" | "image01" {
+  // If any coord is outside [ -0.05, 1.05 ], assume canonical (e.g., -1..+1)
+  let minX = Infinity,
+    maxX = -Infinity,
+    minY = Infinity,
+    maxY = -Infinity;
+  for (const p of points) {
+    if (!p) continue;
+    minX = Math.min(minX, p.x);
+    maxX = Math.max(maxX, p.x);
+    minY = Math.min(minY, p.y);
+    maxY = Math.max(maxY, p.y);
+  }
+  const within01 =
+    minX >= -0.05 && maxX <= 1.05 && minY >= -0.05 && maxY <= 1.05;
+  return within01 ? "image01" : "canonical";
+}
+
+/**
+ * Project a set of points to canvas space.
+ * - canonical: arbitrary units around (0,0) → fit bbox into canvas with margin
+ * - image01: [0..1] → simple scale to canvas
+ * Optional horizontal mirror for selfie parity.
+ */
+function projectToCanvas(
+  pts: XY[],
+  canvas: HTMLCanvasElement,
+  opts?: { mirror?: boolean; marginFrac?: number }
+): XY[] {
+  const W = canvas.width,
+    H = canvas.height;
+  const mirror = !!opts?.mirror;
+  const marginFrac = opts?.marginFrac ?? 0.08; // 8% padding
+
+  const mode = detectCanonicalSpace(pts);
+
+  if (mode === "image01") {
+    // straightforward: [0..1] → pixels
+    return pts.map((p) => {
+      if (!p) return p as any;
+      const x01 = mirror ? 1 - p.x : p.x;
+      return { x: x01 * W, y: p.y * H };
+    });
+  }
+
+  // canonical fit: compute bbox → scale to fit with margins, keep aspect
+  let minX = Infinity,
+    maxX = -Infinity,
+    minY = Infinity,
+    maxY = -Infinity;
+  for (const p of pts) {
+    if (!p) continue;
+    minX = Math.min(minX, p.x);
+    maxX = Math.max(maxX, p.x);
+    minY = Math.min(minY, p.y);
+    maxY = Math.max(maxY, p.y);
+  }
+  const bw = maxX - minX || 1e-6;
+  const bh = maxY - minY || 1e-6;
+
+  const padX = W * marginFrac;
+  const padY = H * marginFrac;
+  const availW = Math.max(1, W - 2 * padX);
+  const availH = Math.max(1, H - 2 * padY);
+  const s = Math.min(availW / bw, availH / bh);
+
+  const cx = (minX + maxX) / 2;
+  const cy = (minY + maxY) / 2;
+
+  const outCenter = { x: W / 2, y: H / 2 };
+  return pts.map((p) => {
+    if (!p) return p as any;
+    const sx = (p.x - cx) * s;
+    const sy = (p.y - cy) * s;
+    const dx = mirror ? -sx : sx;
+    return { x: outCenter.x + dx, y: outCenter.y + sy };
+  });
+}
 
 // ---- Simple math helpers ----
 type Pt = { x: number; y: number; z?: number; visibility?: number };
@@ -397,7 +479,6 @@ function scoreAgainstTemplate(
   let num = 0,
     den = 0;
   used.forEach(([, , n, , w]) => {
-    // note: we could tweak by per-row visibility; keeping stable per simplicity
     num += n * w;
     den += w;
   });
@@ -458,6 +539,25 @@ const WorkoutSession = () => {
     return () => clearInterval(id);
   }, [sessionData, resetSmoother]);
 
+  // Keep the template canvas' pixel size synced to its CSS box for crisp lines
+  useEffect(() => {
+    const c = templateCanvasRef.current;
+    if (!c) return;
+    const syncSize = () => {
+      const rect = c.getBoundingClientRect();
+      const W = Math.max(1, Math.floor(rect.width));
+      const H = Math.max(1, Math.floor(rect.height));
+      if (c.width !== W || c.height !== H) {
+        c.width = W;
+        c.height = H;
+      }
+    };
+    syncSize();
+    const ro = new ResizeObserver(syncSize);
+    ro.observe(c);
+    return () => ro.disconnect();
+  }, []);
+
   // Prepare & draw template preview; cache template shape/embedding if landmarks exist
   useEffect(() => {
     const canvas = templateCanvasRef.current;
@@ -466,49 +566,70 @@ const WorkoutSession = () => {
     if (!ctx) return;
 
     ctx.clearRect(0, 0, canvas.width, canvas.height);
+    tplShapeRef.current = {}; // reset cache unless set below
 
     const t = currentTemplate;
-    // Reset cache unless we set below
-    tplShapeRef.current = {};
+    if (!t?.landmarks) return;
 
-    // Draw preview if landmarks provided
-    if (t?.landmarks) {
-      const lmArr = coerceTemplateLandmarks(t.landmarks);
-      if (lmArr) {
-        // cache a normalized template skeleton & its embedding
-        const norm = normalizeXY(lmArr);
-        if (norm) {
-          tplShapeRef.current = {
-            poseId: t.pose_id,
-            normTpl: norm,
-            embTpl: embedPose(norm),
-          };
-        }
+    const lmArr = coerceTemplateLandmarks(t.landmarks);
+    if (!lmArr) return;
 
-        // Draw the provided landmarks directly (assumed 0..1 normalized)
-        ctx.strokeStyle = "#6b7280";
-        ctx.lineWidth = 2;
-        ctx.beginPath();
-        (POSE_CONNECTIONS as any as Array<[number, number]>).forEach(
-          ([i, j]) => {
-            const a = lmArr[i];
-            const b = lmArr[j];
-            if (!a || !b) return;
-            ctx.moveTo(a.x * canvas.width, a.y * canvas.height);
-            ctx.lineTo(b.x * canvas.width, b.y * canvas.height);
-          }
-        );
-        ctx.stroke();
-
-        ctx.fillStyle = "#9ca3af";
-        for (const p of lmArr) {
-          if (!p) continue;
-          ctx.beginPath();
-          ctx.arc(p.x * canvas.width, p.y * canvas.height, 3, 0, Math.PI * 2);
-          ctx.fill();
-        }
-      }
+    // Cache normalized template for hybrid scoring (uses canonical normalizeXY)
+    const norm = normalizeXY(lmArr as any);
+    if (norm) {
+      tplShapeRef.current = {
+        poseId: t.pose_id,
+        normTpl: norm,
+        embTpl: embedPose(norm),
+      };
     }
+
+    // --- PREVIEW RENDERING with projection ---
+    const MIRROR_PREVIEW = true;
+
+    // Build compact set of points used by POSE_CONNECTIONS
+    const usedIdx = new Set<number>();
+    (POSE_CONNECTIONS as any as Array<[number, number]>).forEach(([i, j]) => {
+      usedIdx.add(i);
+      usedIdx.add(j);
+    });
+    const pts: XY[] = [];
+    usedIdx.forEach((i) => {
+      const p = lmArr[i];
+      if (p) pts[i] = { x: p.x, y: p.y };
+    });
+
+    // Project to canvas space (auto-detect canonical vs [0..1])
+    const proj = projectToCanvas(pts, canvas, {
+      mirror: MIRROR_PREVIEW,
+      marginFrac: 0.1,
+    });
+
+    // Dynamic stroke based on canvas size
+    const stroke = Math.max(2, Math.round(canvas.width * 0.008));
+
+    // Lines
+    ctx.strokeStyle = "#6b7280";
+    ctx.lineWidth = stroke;
+    ctx.beginPath();
+    (POSE_CONNECTIONS as any as Array<[number, number]>).forEach(([i, j]) => {
+      const a = proj[i],
+        b = proj[j];
+      if (!a || !b) return;
+      ctx.moveTo(a.x, a.y);
+      ctx.lineTo(b.x, b.y);
+    });
+    ctx.stroke();
+
+    // Points
+    ctx.fillStyle = "#9ca3af";
+    const r = Math.max(2, Math.round(stroke * 0.5));
+    proj.forEach((p) => {
+      if (!p) return;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
+      ctx.fill();
+    });
   }, [currentTemplate]);
 
   // Webcam + Pose Detection
@@ -685,8 +806,6 @@ const WorkoutSession = () => {
             <CardContent>
               <canvas
                 ref={templateCanvasRef}
-                width={640}
-                height={480}
                 className="w-full h-auto bg-gray-100 rounded"
               />
             </CardContent>
