@@ -4,6 +4,8 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { ArrowLeft } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
+import { useWorkout } from "@/context/WorkoutContext";
+import api from "@/services/api";
 
 // MediaPipe
 import { Pose, POSE_CONNECTIONS } from "@mediapipe/pose";
@@ -427,6 +429,9 @@ const WorkoutSession = () => {
   const [feedback, setFeedback] = useState(
     "Position yourself in the camera view"
   );
+  const { workout } = useWorkout();
+  const [loadingSet, setLoadingSet] = useState<Set<number>>(new Set());
+  const [failedSet, setFailedSet] = useState<Set<number>>(new Set());
 
   // Per-joint smoother
   const { push: smoothAngle, reset: resetSmoother } = useAngleSmoother(7);
@@ -443,9 +448,98 @@ const WorkoutSession = () => {
     [sessionData, currentStep]
   );
 
+  // Prefer workout context; fallback to location.state templates if present
   useEffect(() => {
-    if (location.state) setSessionData(location.state);
-  }, [location.state]);
+    if (workout?.exercises?.length) {
+      setSessionData({
+        type: "workout",
+        templates: new Array(workout.exercises.length).fill(null),
+      });
+      setCurrentStep(0);
+      return;
+    }
+    if (location.state?.templates) {
+      setSessionData(location.state);
+      setCurrentStep(0);
+    }
+  }, [workout, location.state]);
+
+  // Fetch pose templates and overlay images per exercise via backend
+  useEffect(() => {
+    const fetchForIndex = async (idx: number) => {
+      if (!workout?.exercises?.[idx]) return;
+      const name = workout.exercises[idx].name;
+      try {
+        setLoadingSet((prev) => {
+          const next = new Set(prev);
+          next.add(idx);
+          return next;
+        });
+        // A) search for pose by exercise name
+        const searchResp = await api.get("/poses/search", {
+          params: { name },
+        });
+        const matches: Array<{ pose_id: string; score?: number }> =
+          searchResp?.data || [];
+        if (!matches.length) {
+          toast({ title: "No pose found", description: `No template matched "${name}"` });
+          setFailedSet((prev) => {
+            const next = new Set(prev);
+            next.add(idx);
+            return next;
+          });
+          if (idx === currentStep && sessionData?.templates?.length) {
+            setCurrentStep((p) => (p + 1 < sessionData.templates.length ? p + 1 : 0));
+          }
+          return;
+        }
+        const best = matches[0];
+
+        // B) fetch mediapipe-correct pose data
+        const tplResp = await api.get(`/poses/${encodeURIComponent(best.pose_id)}`);
+        const tplData = tplResp?.data || {};
+        tplData.pose_id = tplData.pose_id || best.pose_id;
+
+        // C) fetch overlay image (optional)
+        let overlayUrl: string | undefined;
+        try {
+          const overlayResp = await api.get(
+            `/poses/${encodeURIComponent(best.pose_id)}/overlay`,
+            { responseType: "blob" }
+          );
+          const blob = overlayResp?.data as Blob;
+          if (blob && blob.size > 0) overlayUrl = URL.createObjectURL(blob);
+        } catch {}
+
+        setSessionData((prev: any) => {
+          if (!prev?.templates) return prev;
+          const next = [...prev.templates];
+          next[idx] = { ...tplData, overlayUrl, searchScore: best.score };
+          return { ...prev, templates: next };
+        });
+      } catch (err) {
+        console.error("Pose fetch failed for", name, err);
+        toast({
+          title: "Pose fetch failed",
+          description: `Could not load template for "${name}"`,
+          // @ts-expect-error variant supported by ToastProps
+          variant: "destructive",
+        } as any);
+      } finally {
+        setLoadingSet((prev) => {
+          const next = new Set(prev);
+          next.delete(idx);
+          return next;
+        });
+      }
+    };
+
+    if (workout?.exercises?.length && sessionData?.templates?.length) {
+      workout.exercises.forEach((_, idx) => {
+        if (!sessionData.templates[idx] && !failedSet.has(idx)) fetchForIndex(idx);
+      });
+    }
+  }, [workout, sessionData?.templates?.length, failedSet, currentStep]);
 
   // Auto-advance every 10s (loop)
   useEffect(() => {
@@ -487,24 +581,37 @@ const WorkoutSession = () => {
     tplShapeRef.current = {}; // reset cache unless set below
 
     const t = currentTemplate;
-    if (!t?.landmarks) return;
-
-    const lmArr = coerceTemplateLandmarks(t.landmarks);
-    if (!lmArr) return;
-
-    // Cache normalized template for hybrid scoring (uses canonical normalizeXY)
-    const norm = normalizeXY(lmArr as any);
-    if (norm) {
-      tplShapeRef.current = {
-        poseId: t.pose_id,
-        normTpl: norm,
-        embTpl: embedPose(norm),
+    // Draw overlay if available
+    if (t?.overlayUrl) {
+      const img = new Image();
+      img.onload = () => {
+        const cw = canvas.width, ch = canvas.height;
+        const iw = img.width, ih = img.height;
+        const scale = Math.min(cw / iw, ch / ih);
+        const dw = Math.max(1, Math.floor(iw * scale));
+        const dh = Math.max(1, Math.floor(ih * scale));
+        const dx = Math.floor((cw - dw) / 2);
+        const dy = Math.floor((ch - dh) / 2);
+        ctx.clearRect(0, 0, cw, ch);
+        ctx.drawImage(img, dx, dy, dw, dh);
       };
+      img.src = t.overlayUrl;
     }
 
-    // Preview rendering disabled: hide stickman on template preview for now.
-    // We still compute and cache normalized template (above) for scoring.
-    // Leaving the canvas cleared so the card shows a blank area.
+    // If landmarks exist, cache normalized template for scoring
+    if (t?.landmarks) {
+      const lmArr = coerceTemplateLandmarks(t.landmarks);
+      if (lmArr) {
+        const norm = normalizeXY(lmArr as any);
+        if (norm) {
+          tplShapeRef.current = {
+            poseId: t.pose_id,
+            normTpl: norm,
+            embTpl: embedPose(norm),
+          };
+        }
+      }
+    }
   }, [currentTemplate]);
 
   // Webcam + Pose Detection
@@ -679,10 +786,49 @@ const WorkoutSession = () => {
               </CardTitle>
             </CardHeader>
             <CardContent>
-              <canvas
-                ref={templateCanvasRef}
-                className="w-full h-auto bg-gray-100 rounded"
-              />
+              <div className="space-y-3">
+                <div className="relative">
+                  <canvas
+                    ref={templateCanvasRef}
+                    className="w-full h-auto bg-gray-100 rounded"
+                  />
+                  {loadingSet.has(currentStep) && (
+                    <div className="absolute inset-0 flex items-center justify-center">
+                      <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+                    </div>
+                  )}
+                </div>
+                {/* Exercise info when a template is loaded */}
+                {currentTemplate ? (
+                  <div className="text-sm space-y-1">
+                    <div className="font-semibold">
+                      {workout?.exercises?.[currentStep]?.name || currentTemplate?.pose_id}
+                    </div>
+                    <div className="text-muted-foreground">
+                      {[workout?.exercises?.[currentStep]?.difficulty, workout?.exercises?.[currentStep]?.duration]
+                        .filter(Boolean)
+                        .join(" • ")}
+                    </div>
+                    {workout?.exercises?.[currentStep]?.description && (
+                      <p className="text-muted-foreground/90">
+                        {workout.exercises[currentStep].description}
+                      </p>
+                    )}
+                    {Array.isArray(workout?.exercises?.[currentStep]?.modifications) &&
+                      ((workout?.exercises?.[currentStep]?.modifications?.length ?? 0) > 0) && (
+                        <p className="text-xs text-muted-foreground">
+                          Modifications: {workout?.exercises?.[currentStep]?.modifications?.join(
+                            ", "
+                          )}
+                        </p>
+                      )}
+                  </div>
+                ) : failedSet.has(currentStep) ? (
+                  <p className="text-sm text-muted-foreground">
+                    No template found for "{workout?.exercises?.[currentStep]?.name}". Skipping…
+                  </p>
+                ) : null}
+              </div>
             </CardContent>
           </Card>
 
