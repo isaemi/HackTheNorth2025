@@ -5,6 +5,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
 import { ArrowLeft, Loader2 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
+import RehabReasoningBanner from "@/components/rehab/RehabReasoningBanner";
 import { useWorkout } from "@/context/WorkoutContext";
 import api from "@/services/api";
 
@@ -1244,9 +1245,14 @@ const WorkoutSession = () => {
             End Session
           </Button>
           <h1 className="text-3xl font-bold text-foreground">
-            {currentTemplate?.pose_id || "Custom Video Analysis"}
+            {currentTemplate?.pose_id || workout?.workoutName || "Workout Session"}
           </h1>
         </div>
+
+        {/* Rehab reasoning banner if provided */}
+        {workout?.reasoning ? (
+          <RehabReasoningBanner reasoning={workout.reasoning} />
+        ) : null}
 
         {/* 2 columns */}
         <div className="grid lg:grid-cols-2 gap-6 mb-6">

@@ -11,7 +11,7 @@ const Index = () => {
 
   useEffect(() => {
     const handler = () => {
-      speak("Welcome! Choose a workout or upload a video");
+      speak("Welcome! Choose a workout or begin rehab");
       window.removeEventListener("click", handler);
     };
 
@@ -52,10 +52,10 @@ const Index = () => {
           <Button 
             variant="secondary-hero"
             size="xl"
-            onClick={() => navigate('/upload')}
+            onClick={() => navigate('/rehab')}
             className="w-full sm:w-auto min-w-[200px]"
           >
-            Upload Custom Video
+            Begin Rehab
           </Button>
         </div>
       </div>

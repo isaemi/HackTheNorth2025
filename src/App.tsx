@@ -6,7 +6,7 @@ import { BrowserRouter, Routes, Route } from "react-router-dom";
 import { WorkoutProvider } from "./context/WorkoutContext";
 import Index from "./pages/Index";
 import PresetWorkout from "./pages/PresetWorkout";
-import UploadWorkout from "./pages/UploadWorkout";
+import Rehab from "./pages/Rehab";
 import WorkoutSession from "./pages/WorkoutSession";
 import NotFound from "./pages/NotFound";
 const queryClient = new QueryClient();
@@ -21,7 +21,7 @@ const App = () => (
           <Routes>
             <Route path="/" element={<Index />} />
             <Route path="/preset" element={<PresetWorkout />} />
-            <Route path="/upload" element={<UploadWorkout />} />
+            <Route path="/rehab" element={<Rehab />} />
             <Route path="/session" element={<WorkoutSession />} />
             <Route path="*" element={<NotFound />} />
           </Routes>

@@ -22,6 +22,8 @@ export type WorkoutResponse = {
   workoutName: string;
   totalDuration: string;
   exercises: Exercise[];
+  // Optional explanation when generated from Rehab flow
+  reasoning?: string;
 };
 
 type WorkoutContextValue = {
