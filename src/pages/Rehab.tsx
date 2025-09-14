@@ -1,12 +1,14 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { ArrowLeft, Loader2 } from "lucide-react";
+import { ArrowLeft } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { useToast } from "@/hooks/use-toast";
 import { useWorkout } from "@/context/WorkoutContext";
 import PainForm, { PainFormValues } from "@/components/rehab/PainForm";
 import { generateRehabPlan } from "@/services/rehab";
+
+import backgroundImage from "@/assets/background-image.png"; 
 
 const Rehab = () => {
   const navigate = useNavigate();
@@ -15,10 +17,10 @@ const Rehab = () => {
   const [submitting, setSubmitting] = useState(false);
 
   const handleSubmit = async (values: PainFormValues) => {
+    // ... (your form submission logic remains the same)
     setSubmitting(true);
     const pending = toast({ title: "Generating rehab plan", description: "Personalizing to your symptoms…" });
     try {
-      // Build payload; keep keys readable for the backend
       const payload = {
         areas: values.areas,
         painTypes: values.painTypes,
@@ -30,68 +32,48 @@ const Rehab = () => {
         goals: values.goals?.trim() || undefined,
         notes: values.notes?.trim() || undefined,
       };
-
       const data = await generateRehabPlan(payload);
-
-      // Store in context and proceed to session
       setWorkout(data);
-
-      try {
-        pending.update({
-          title: "Rehab plan ready",
-          description: data?.workoutName || "Let's get moving",
-          open: true,
-        } as any);
-      } catch {}
-
+      pending.update({ title: "Rehab plan ready", description: data?.workoutName || "Let's get moving", open: true } as any);
       navigate("/session");
       setTimeout(() => pending.dismiss?.(), 2500);
     } catch (err) {
       console.error("Rehab generation failed", err);
-      pending.update({
-        title: "Could not generate plan",
-        description: "Please adjust inputs and try again.",
-        variant: "destructive",
-        open: true,
-      } as any);
+      pending.update({ title: "Could not generate plan", description: "Please adjust inputs and try again.", variant: "destructive", open: true } as any);
     } finally {
       setSubmitting(false);
     }
   };
 
   return (
-    <div className="min-h-screen bg-gradient-background p-6">
-      <div className="max-w-5xl mx-auto space-y-6">
-        {/* Header */}
-        <div className="flex items-center gap-4">
+    <div 
+      className="min-h-screen p-4 flex items-center justify-center bg-cover bg-center"
+      style={{ backgroundImage: `url(${backgroundImage})` }}
+    >
+      {/* Card now has relative positioning and the custom-scrollbar class */}
+      <Card className="w-full max-w-4xl bg-white/80 backdrop-blur-sm border-0 shadow-lg max-h-[85vh] overflow-y-auto relative custom-scrollbar">
+        {/* CardHeader is centered and has padding for the button */}
+        <CardHeader className="pt-12 text-center">
           <Button
             variant="ghost"
-            size="sm"
+            size="icon"
             onClick={() => navigate("/")}
-            className="flex items-center gap-2"
+            // Button is positioned absolutely within the card
+            className="absolute top-4 left-4 text-gray-600 hover:bg-black/10 hover:text-black" 
           >
-            <ArrowLeft className="w-4 h-4" />
-            Back to Home
+            <ArrowLeft className="w-5 h-5" />
           </Button>
-          <h1 className="text-3xl font-bold">Begin Rehab</h1>
-        </div>
-
-        {/* Intro */}
-        <Card className="bg-gradient-card backdrop-blur-sm border-0 shadow-card">
-          <CardHeader>
-            <CardTitle>Tell us about your pain</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <p className="text-muted-foreground mb-4">
-              We’ll craft a safe, targeted plan based on your symptoms and goals. You can start your session right after.
-            </p>
-            <PainForm onSubmit={handleSubmit} submitting={submitting} />
-          </CardContent>
-        </Card>
-      </div>
+          <CardTitle className="text-2xl">Tell us about your pain</CardTitle>
+          <CardDescription>
+            We’ll craft a safe, targeted plan based on your symptoms and goals.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <PainForm onSubmit={handleSubmit} submitting={submitting} />
+        </CardContent>
+      </Card>
     </div>
   );
 };
 
 export default Rehab;
-
