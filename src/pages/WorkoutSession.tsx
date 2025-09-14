@@ -381,6 +381,88 @@ function drawSkeletonColored(
   });
 }
 
+// Small callout labels for top issues on the skeleton
+function drawIssueCallouts(
+  ctx: CanvasRenderingContext2D,
+  lm: Pt[],
+  issues: Array<{ joint: string; text: string }>
+) {
+  if (!issues.length) return;
+  const W = ctx.canvas.width,
+    H = ctx.canvas.height;
+
+  const anchorFor = (joint: string): { x: number; y: number } | null => {
+    switch (joint) {
+      case "left_elbow":
+        return lm[L.LEFT_ELBOW] ? { x: lm[L.LEFT_ELBOW].x * W, y: lm[L.LEFT_ELBOW].y * H } : null;
+      case "right_elbow":
+        return lm[L.RIGHT_ELBOW] ? { x: lm[L.RIGHT_ELBOW].x * W, y: lm[L.RIGHT_ELBOW].y * H } : null;
+      case "left_knee":
+        return lm[L.LEFT_KNEE] ? { x: lm[L.LEFT_KNEE].x * W, y: lm[L.LEFT_KNEE].y * H } : null;
+      case "right_knee":
+        return lm[L.RIGHT_KNEE] ? { x: lm[L.RIGHT_KNEE].x * W, y: lm[L.RIGHT_KNEE].y * H } : null;
+      case "left_shoulder":
+        return lm[L.LEFT_SHOULDER]
+          ? { x: lm[L.LEFT_SHOULDER].x * W, y: lm[L.LEFT_SHOULDER].y * H }
+          : null;
+      case "right_shoulder":
+        return lm[L.RIGHT_SHOULDER]
+          ? { x: lm[L.RIGHT_SHOULDER].x * W, y: lm[L.RIGHT_SHOULDER].y * H }
+          : null;
+      case "left_hip":
+        return lm[L.LEFT_HIP] ? { x: lm[L.LEFT_HIP].x * W, y: lm[L.LEFT_HIP].y * H } : null;
+      case "right_hip":
+        return lm[L.RIGHT_HIP]
+          ? { x: lm[L.RIGHT_HIP].x * W, y: lm[L.RIGHT_HIP].y * H }
+          : null;
+      case "spine_tilt":
+        if (lm[L.LEFT_SHOULDER] && lm[L.RIGHT_SHOULDER]) {
+          return {
+            x: ((lm[L.LEFT_SHOULDER].x + lm[L.RIGHT_SHOULDER].x) / 2) * W,
+            y: ((lm[L.LEFT_SHOULDER].y + lm[L.RIGHT_SHOULDER].y) / 2) * H,
+          };
+        }
+        return null;
+      default:
+        return null;
+    }
+  };
+
+  ctx.font = "12px system-ui, -apple-system, Segoe UI, Roboto";
+  issues.forEach(({ joint, text }, idx) => {
+    const anchor = anchorFor(joint);
+    if (!anchor) return;
+    const padX = 8;
+    const padY = 6;
+    const metrics = ctx.measureText(text);
+    const boxW = Math.ceil(metrics.width) + padX * 2;
+    const boxH = 22;
+
+    // Offset labels slightly to avoid overlap; alternate directions
+    const offX = 12 * (idx % 2 === 0 ? 1 : -1);
+    const offY = -28 - idx * 4;
+    const x = Math.min(Math.max(4, anchor.x + offX - boxW / 2), W - boxW - 4);
+    const y = Math.min(Math.max(4, anchor.y + offY - boxH / 2), H - boxH - 4);
+
+    // Box
+    ctx.fillStyle = "rgba(0,0,0,0.55)";
+    ctx.fillRect(x, y, boxW, boxH);
+    ctx.strokeStyle = "rgba(255,255,255,0.25)";
+    ctx.strokeRect(x + 0.5, y + 0.5, boxW - 1, boxH - 1);
+
+    // Text
+    ctx.fillStyle = "#fff";
+    ctx.fillText(text, x + padX, y + boxH - 8);
+
+    // Leader line from box to anchor
+    ctx.strokeStyle = "rgba(255,255,255,0.5)";
+    ctx.beginPath();
+    ctx.moveTo(anchor.x, anchor.y);
+    ctx.lineTo(x + boxW / 2, y + boxH);
+    ctx.stroke();
+  });
+}
+
 // ======================= ANGLE SCORING =======================
 function scoreAgainstTemplate(
   userAngles: Record<string, number>,
@@ -457,7 +539,7 @@ const WorkoutSession = () => {
   const [feedback, setFeedback] = useState(
     "Position yourself in the camera view"
   );
-  const { workout } = useWorkout();
+  const { workout, ensureCamera, cameraStatus } = useWorkout();
   const [loadingSet, setLoadingSet] = useState<Set<number>>(new Set());
   const [failedSet, setFailedSet] = useState<Set<number>>(new Set());
 
@@ -672,46 +754,53 @@ const WorkoutSession = () => {
     const ctx = canvas.getContext("2d")!;
     let camera: MediaPipeCamera | null = null;
     let pose: Pose | null = null;
+    let ro: ResizeObserver | null = null;
 
-    // Resize canvas to element size for crisp drawing
-    const resize = () => {
-      const rect = canvas.getBoundingClientRect();
-      canvas.width = Math.floor(rect.width);
-      canvas.height = Math.floor(rect.height);
-    };
-    resize();
-    const ro = new ResizeObserver(resize);
-    ro.observe(canvas);
+    // Ensure camera permission before starting pipeline
+    let cancelled = false;
+    const start = async () => {
+      const ok = await ensureCamera();
+      if (!ok || cancelled) return;
 
-    pose = new Pose({
-      locateFile: (file) =>
-        `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`,
-    });
-    pose.setOptions({
-      modelComplexity: 1, // can switch to 2 during "hold"
-      smoothLandmarks: true,
-      enableSegmentation: false,
-      minDetectionConfidence: 0.6,
-      minTrackingConfidence: 0.6,
-      // Disable selfie mode to avoid mirrored processing
-      selfieMode: false,
-    });
+      // Resize canvas to element size for crisp drawing
+      const resize = () => {
+        const rect = canvas.getBoundingClientRect();
+        canvas.width = Math.floor(rect.width);
+        canvas.height = Math.floor(rect.height);
+      };
+      resize();
+      ro = new ResizeObserver(resize);
+      ro.observe(canvas);
 
-    pose.onResults((results: any) => {
-      ctx.save();
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      pose = new Pose({
+        locateFile: (file) =>
+          `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`,
+      });
+      pose.setOptions({
+        modelComplexity: 1, // can switch to 2 during "hold"
+        smoothLandmarks: true,
+        enableSegmentation: false,
+        minDetectionConfidence: 0.6,
+        minTrackingConfidence: 0.6,
+        // Disable selfie mode to avoid mirrored processing
+        selfieMode: false,
+      });
 
-      // Draw video bg
-      if (results.image) {
-        ctx.drawImage(results.image, 0, 0, canvas.width, canvas.height);
-      }
+      pose.onResults((results: any) => {
+        ctx.save();
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-      const lm: Pt[] | undefined = results.poseLandmarks;
-      const tpl = currentTemplateRef.current;
-      if (!lm || !tpl) {
-        ctx.restore();
-        return;
-      }
+        // Draw video bg
+        if (results.image) {
+          ctx.drawImage(results.image, 0, 0, canvas.width, canvas.height);
+        }
+
+        const lm: Pt[] | undefined = results.poseLandmarks;
+        const tpl = currentTemplateRef.current;
+        if (!lm || !tpl) {
+          ctx.restore();
+          return;
+        }
 
       // Visibility array
       const visibility: number[] = Array(33).fill(1);
@@ -789,7 +878,7 @@ const WorkoutSession = () => {
         );
       } else if (rows.length) {
         const sorted = [...rows].sort((a, b) => b[2] - a[2]); // [joint, diff, norm, tol, w]
-        const top = sorted.filter((r) => r[2] > 1).slice(0, 2);
+        const top = sorted.filter((r) => r[2] >= 0.6).slice(0, 2);
         if (!top.length) {
           setFeedback("Nice! Hold steady…");
         } else {
@@ -820,6 +909,36 @@ const WorkoutSession = () => {
 
       // Draw skeleton color-coded by ANGLE error (intuitive)
       drawSkeletonColored(ctx, lm, POSE_CONNECTIONS as any, jointErr);
+
+      // Draw callouts for the top issues near the relevant joints
+      let issueCallouts: Array<{ joint: string; text: string }> = [];
+      if (rows.length) {
+        const sorted = [...rows].sort((a, b) => b[2] - a[2]);
+        const top = sorted.filter((r) => r[2] >= 0.6).slice(0, 2);
+        issueCallouts = top.map(([joint, diff]) => {
+          const ref = (tpl.angles_deg || {})[joint] as number | undefined;
+          const val = angles[joint];
+          const delta = ref != null && val != null ? Math.round(ref - val) : Math.round(diff);
+          const mag = Math.abs(delta);
+          const dir = delta > 0 ? "↑" : "↓";
+          const nice = joint.replace(/_/g, " ");
+          // Short label e.g., "bend left elbow 12°"
+          const verb = /elbow|knee/.test(joint)
+            ? delta > 0
+              ? "straighten"
+              : "bend"
+            : /spine/.test(joint)
+            ? delta > 0
+              ? "upright"
+              : "lean"
+            : delta > 0
+            ? "increase"
+            : "decrease";
+          const text = `${verb} ${nice} ${mag}° ${dir}`;
+          return { joint, text };
+        });
+      }
+      drawIssueCallouts(ctx, lm, issueCallouts);
 
       // If limbs missing, draw a gentle overlay prompt
       if (coverage < 0.8 || missing.length) {
@@ -854,15 +973,25 @@ const WorkoutSession = () => {
     toast({ title: "Webcam activated", description: "Pose detection started" });
 
     return () => {
+      cancelled = true;
       try {
         camera?.stop();
       } catch {}
       try {
         (pose as any)?.close?.();
       } catch {}
-      ro.disconnect();
+      ro?.disconnect();
     };
-  }, []);
+    };
+
+    start();
+    return () => {
+      // ensure cleanup if effect re-runs
+      try { camera?.stop(); } catch {}
+      try { (pose as any)?.close?.(); } catch {}
+      ro?.disconnect();
+    };
+  }, [ensureCamera]);
 
   return (
     <div className="h-screen bg-gradient-background p-6">
