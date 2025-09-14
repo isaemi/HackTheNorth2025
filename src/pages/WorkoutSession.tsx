@@ -1021,6 +1021,15 @@ const WorkoutSession = () => {
         }
 
         // EMA smoothing for display
+        console.debug("DBG", {
+          sAngle,
+          rowsLen: rows?.length ?? 0,
+          sBone,
+          sEmbed,
+          tplPose: tpl?.pose_id,
+          hasAngles: !!tpl?.angles_deg,
+        });
+
         if (finalScore != null) {
           const prev = scoreEmaRef.current;
           const alpha = 0.25;
