@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Progress } from "@/components/ui/progress";
 import { ArrowLeft, Loader2 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { useWorkout } from "@/context/WorkoutContext";
@@ -536,12 +537,23 @@ const WorkoutSession = () => {
   const [sessionData, setSessionData] = useState<any>(null);
   const [currentStep, setCurrentStep] = useState(0);
   const [score, setScore] = useState<number | null>(null);
+  // Per-exercise stable scores and session completion
+  const [perExerciseScores, setPerExerciseScores] = useState<(number | null)[]>([]);
+  const [sessionComplete, setSessionComplete] = useState(false);
+  // Buffer of frame-by-frame scores for the current step (high-coverage only)
+  const scoreBufferRef = useRef<number[]>([]);
+  const lastCoverageRef = useRef<number>(0);
   const [feedback, setFeedback] = useState(
     "Position yourself in the camera view"
   );
   const { workout, ensureCamera, cameraStatus } = useWorkout();
   const [loadingSet, setLoadingSet] = useState<Set<number>>(new Set());
   const [failedSet, setFailedSet] = useState<Set<number>>(new Set());
+  // Simple per-step countdown
+  const [stepDurationSec, setStepDurationSec] = useState<number>(30);
+  const [timeLeftSec, setTimeLeftSec] = useState<number>(30);
+  const [isTimerRunning, setIsTimerRunning] = useState<boolean>(true);
+  const timerIdRef = useRef<number | null>(null);
 
   // Per-joint smoother
   const { push: smoothAngle, reset: resetSmoother } = useAngleSmoother(7);
@@ -555,6 +567,7 @@ const WorkoutSession = () => {
 
   // Score EMA to reduce jitter in display
   const scoreEmaRef = useRef<number | null>(null);
+  const stopCameraRef = useRef<null | (() => void)>(null);
 
   // Keep the latest template available to the pose callback without
   // reinitializing the camera/pose pipeline on every change.
@@ -564,6 +577,82 @@ const WorkoutSession = () => {
     () => sessionData?.templates?.[currentStep],
     [sessionData, currentStep]
   );
+
+  // Initialize/reset per-exercise scores array when session templates change
+  useEffect(() => {
+    const len = sessionData?.templates?.length || workout?.exercises?.length || 0;
+    if (len > 0) {
+      setPerExerciseScores((prev) => {
+        if (prev.length === len) return prev;
+        return new Array(len).fill(null);
+      });
+    }
+  }, [sessionData?.templates?.length, workout?.exercises?.length]);
+
+  // Helper to robustly aggregate frame scores into a single stable score
+  const aggregateScore = (frames: number[]): number | null => {
+    if (!frames || frames.length === 0) return null;
+    const vals = [...frames].sort((a, b) => a - b);
+    const start = Math.floor(vals.length * 0.7); // top 30%
+    const top = vals.slice(start);
+    if (top.length === 0) return Math.round(vals[Math.floor(vals.length / 2)]);
+    const med = top[Math.floor((top.length - 1) / 2)];
+    return Math.round(med);
+  };
+
+  // Advance to next exercise, persisting a stable score for the current step
+  const goNext = () => {
+    // Pause timer while transitioning
+    setIsTimerRunning(false);
+    // Save current step score
+    const stable = aggregateScore(scoreBufferRef.current);
+    setPerExerciseScores((prev) => {
+      const next = [...prev];
+      if (currentStep < next.length) next[currentStep] = stable;
+      return next;
+    });
+    // Clear buffer for next step
+    scoreBufferRef.current = [];
+    scoreEmaRef.current = null;
+    setScore(null);
+    resetSmoother();
+
+    const total = sessionData?.templates?.length || workout?.exercises?.length || 0;
+    const nextStep = currentStep + 1;
+    if (nextStep < total) {
+      setCurrentStep(nextStep);
+    } else {
+      // End of session
+      setSessionComplete(true);
+      // stop camera pipeline
+      try { stopCameraRef.current?.(); } catch {}
+    }
+  };
+
+  // Parse exercise duration like "45 sec", "1 min", "00:30", etc.
+  const parseDurationToSeconds = (s?: string | null): number => {
+    if (!s) return 30;
+    const str = String(s).trim().toLowerCase();
+    const parts = str.split(":");
+    if (parts.length === 2 || parts.length === 3) {
+      const nums = parts.map((t) => parseInt(t, 10));
+      if (nums.every((n) => !isNaN(n))) {
+        const [h, m, sec] = parts.length === 3 ? nums : [0, nums[0], nums[1]];
+        return Math.max(10, h * 3600 + m * 60 + sec);
+      }
+    }
+    const m = str.match(/(\d+(?:\.\d+)?)\s*(hours?|hrs?|h|minutes?|mins?|m|seconds?|secs?|s)\b/);
+    if (m) {
+      const val = parseFloat(m[1]);
+      const unit = m[2];
+      if (/h/.test(unit)) return Math.max(10, Math.round(val * 3600));
+      if (/m/.test(unit) && !/ms/.test(unit)) return Math.max(10, Math.round(val * 60));
+      return Math.max(10, Math.round(val));
+    }
+    const num = parseInt(str, 10);
+    if (!isNaN(num)) return Math.max(10, num);
+    return 30;
+  };
 
   // Prefer workout context; fallback to location.state templates if present
   useEffect(() => {
@@ -580,6 +669,43 @@ const WorkoutSession = () => {
       setCurrentStep(0);
     }
   }, [workout, location.state]);
+
+  // Initialize timer on step change
+  useEffect(() => {
+    const secs = parseDurationToSeconds(workout?.exercises?.[currentStep]?.duration);
+    setStepDurationSec(secs);
+    setTimeLeftSec(secs);
+    setIsTimerRunning(true);
+    if (timerIdRef.current) {
+      clearInterval(timerIdRef.current);
+      timerIdRef.current = null;
+    }
+  }, [currentStep, workout?.exercises]);
+
+  // Tick timer
+  useEffect(() => {
+    if (!isTimerRunning || sessionComplete) return;
+    if (timerIdRef.current) clearInterval(timerIdRef.current);
+    timerIdRef.current = window.setInterval(() => {
+      setTimeLeftSec((t) => {
+        if (t <= 1) {
+          if (timerIdRef.current) {
+            clearInterval(timerIdRef.current);
+            timerIdRef.current = null;
+          }
+          setTimeout(() => goNext(), 0);
+          return 0;
+        }
+        return t - 1;
+      });
+    }, 1000) as unknown as number;
+    return () => {
+      if (timerIdRef.current) {
+        clearInterval(timerIdRef.current);
+        timerIdRef.current = null;
+      }
+    };
+  }, [isTimerRunning, sessionComplete]);
 
   // Fetch pose templates and overlay images per exercise via backend
   useEffect(() => {
@@ -612,6 +738,12 @@ const WorkoutSession = () => {
             setCurrentStep((p) =>
               p + 1 < sessionData.templates.length ? p + 1 : 0
             );
+            // Mark score as null for skipped step
+            setPerExerciseScores((prev) => {
+              const next = [...prev];
+              if (idx < next.length) next[idx] = null;
+              return next;
+            });
           }
           return;
         }
@@ -795,6 +927,11 @@ const WorkoutSession = () => {
           ctx.drawImage(results.image, 0, 0, canvas.width, canvas.height);
         }
 
+        if (sessionComplete) {
+          ctx.restore();
+          return;
+        }
+
         const lm: Pt[] | undefined = results.poseLandmarks;
         const tpl = currentTemplateRef.current;
         if (!lm || !tpl) {
@@ -829,6 +966,7 @@ const WorkoutSession = () => {
         expected = 0,
         visibleCount = 0,
       } = scoreAgainstTemplate(angles, tpl, visibility) as any;
+      lastCoverageRef.current = coverage;
 
       // --- Optional hybrid scores if template landmarks available
       let sBone = 0,
@@ -865,6 +1003,12 @@ const WorkoutSession = () => {
         const ema = prev == null ? finalScore : Math.round(alpha * finalScore + (1 - alpha) * prev);
         scoreEmaRef.current = ema;
         setScore(ema);
+        // Capture only high-coverage frames for stable aggregation
+        if (coverage >= 0.85) {
+          const buf = scoreBufferRef.current;
+          buf.push(ema);
+          if (buf.length > 600) buf.splice(0, buf.length - 600); // ~20s at 30fps
+        }
       } else {
         scoreEmaRef.current = null;
         setScore(null);
@@ -970,6 +1114,12 @@ const WorkoutSession = () => {
     });
     camera.start();
 
+    stopCameraRef.current = () => {
+      try { camera?.stop(); } catch {}
+      try { (pose as any)?.close?.(); } catch {}
+      try { ro?.disconnect(); } catch {}
+    };
+
     toast({ title: "Webcam activated", description: "Pose detection started" });
 
     return () => {
@@ -984,14 +1134,100 @@ const WorkoutSession = () => {
     };
     };
 
-    start();
+    if (!sessionComplete) start();
     return () => {
       // ensure cleanup if effect re-runs
       try { camera?.stop(); } catch {}
       try { (pose as any)?.close?.(); } catch {}
       ro?.disconnect();
     };
-  }, [ensureCamera]);
+  }, [ensureCamera, sessionComplete]);
+
+  // If session completed, clear live feedback text and score buffer
+  useEffect(() => {
+    if (sessionComplete) {
+      setFeedback("Session complete. Great job!");
+      scoreBufferRef.current = [];
+    }
+  }, [sessionComplete]);
+
+  const totalSteps = sessionData?.templates?.length || workout?.exercises?.length || 0;
+  const isLast = currentStep + 1 >= totalSteps;
+
+  // Reset per-step buffers when the step changes (covers auto-advance cases)
+  useEffect(() => {
+    scoreBufferRef.current = [];
+    scoreEmaRef.current = null;
+    setScore(null);
+    resetSmoother();
+  }, [currentStep, resetSmoother]);
+
+  // Final report screen
+  if (sessionComplete) {
+    const items = workout?.exercises || [];
+    const avg = (() => {
+      const vals = perExerciseScores.filter((v): v is number => typeof v === "number");
+      if (!vals.length) return null;
+      return Math.round(vals.reduce((a, b) => a + b, 0) / vals.length);
+    })();
+    return (
+      <div className="min-h-screen bg-gradient-background p-6">
+        <div className="max-w-4xl mx-auto space-y-6">
+          <div className="flex items-center justify-between">
+            <h1 className="text-3xl font-bold">Session Report</h1>
+            <div className="flex gap-3">
+              <Button variant="outline" onClick={() => navigate("/")}>Home</Button>
+              <Button onClick={() => navigate("/preset")}>New Preset Workout</Button>
+              <Button
+                variant="secondary"
+                onClick={() => {
+                  // Reset state and restart session
+                  const len = sessionData?.templates?.length || workout?.exercises?.length || 0;
+                  setPerExerciseScores(len ? new Array(len).fill(null) : []);
+                  scoreBufferRef.current = [];
+                  scoreEmaRef.current = null;
+                  setScore(null);
+                  resetSmoother();
+                  setFeedback("Position yourself in the camera view");
+                  setCurrentStep(0);
+                  setSessionComplete(false);
+                  // Reset and start timer for first step
+                  const secs = parseDurationToSeconds(workout?.exercises?.[0]?.duration);
+                  setStepDurationSec(secs);
+                  setTimeLeftSec(secs);
+                  setIsTimerRunning(true);
+                }}
+              >
+                Restart Session
+              </Button>
+            </div>
+          </div>
+          <Card>
+            <CardHeader>
+              <CardTitle>Overview {avg != null ? `(Avg ${avg}%)` : ""}</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="divide-y">
+                {(items.length ? items : new Array(perExerciseScores.length).fill(null)).map((ex, i) => (
+                  <div key={i} className="flex items-center justify-between py-3">
+                    <div className="text-sm">
+                      <div className="font-medium">{ex?.name || `Exercise ${i + 1}`}</div>
+                      {ex?.description ? (
+                        <div className="text-xs text-muted-foreground line-clamp-1">{ex.description}</div>
+                      ) : null}
+                    </div>
+                    <div className="text-lg font-semibold">
+                      {perExerciseScores[i] != null ? `${perExerciseScores[i]}%` : "—"}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="h-screen bg-gradient-background p-6">
@@ -1096,10 +1332,19 @@ const WorkoutSession = () => {
                   ref={liveCanvasRef}
                   className="absolute inset-0 w-full h-full"
                 />
-              </div>
-            </CardContent>
-          </Card>
-        </div>
+                {/* Controls overlay */}
+                <div className="absolute bottom-3 right-3 flex gap-2">
+                  <Button variant="outline" onClick={() => setIsTimerRunning((r) => !r)}>
+                    {isTimerRunning ? "Pause" : "Resume"}
+                  </Button>
+                  <Button variant="secondary" onClick={goNext}>
+                    {isLast ? "Finish" : "Next"}
+                  </Button>
+                </div>
+            </div>
+          </CardContent>
+        </Card>
+      </div>
 
         {/* Stats */}
         <div className="grid md:grid-cols-2 gap-4">
@@ -1112,6 +1357,23 @@ const WorkoutSession = () => {
               <p className="text-xs mt-2 opacity-70">
                 Angles (gated, smoothed) + Bones + Embedding
               </p>
+              <p className="text-xs mt-1 opacity-70">
+                Step {currentStep + 1} of {totalSteps}
+              </p>
+              {/* Countdown */}
+              <div className="mt-4 flex flex-col items-center gap-2">
+                <div className="text-2xl font-semibold tabular-nums">
+                  {String(Math.floor(timeLeftSec / 60)).padStart(2, "0")}:
+                  {String(timeLeftSec % 60).padStart(2, "0")}
+                </div>
+                <Progress
+                  value={Math.max(
+                    0,
+                    Math.min(100, ((stepDurationSec - timeLeftSec) / Math.max(1, stepDurationSec)) * 100)
+                  )}
+                  className="w-full"
+                />
+              </div>
             </CardContent>
           </Card>
           <Card>
