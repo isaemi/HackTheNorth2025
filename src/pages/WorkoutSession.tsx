@@ -396,13 +396,21 @@ function drawIssueCallouts(
   const anchorFor = (joint: string): { x: number; y: number } | null => {
     switch (joint) {
       case "left_elbow":
-        return lm[L.LEFT_ELBOW] ? { x: lm[L.LEFT_ELBOW].x * W, y: lm[L.LEFT_ELBOW].y * H } : null;
+        return lm[L.LEFT_ELBOW]
+          ? { x: lm[L.LEFT_ELBOW].x * W, y: lm[L.LEFT_ELBOW].y * H }
+          : null;
       case "right_elbow":
-        return lm[L.RIGHT_ELBOW] ? { x: lm[L.RIGHT_ELBOW].x * W, y: lm[L.RIGHT_ELBOW].y * H } : null;
+        return lm[L.RIGHT_ELBOW]
+          ? { x: lm[L.RIGHT_ELBOW].x * W, y: lm[L.RIGHT_ELBOW].y * H }
+          : null;
       case "left_knee":
-        return lm[L.LEFT_KNEE] ? { x: lm[L.LEFT_KNEE].x * W, y: lm[L.LEFT_KNEE].y * H } : null;
+        return lm[L.LEFT_KNEE]
+          ? { x: lm[L.LEFT_KNEE].x * W, y: lm[L.LEFT_KNEE].y * H }
+          : null;
       case "right_knee":
-        return lm[L.RIGHT_KNEE] ? { x: lm[L.RIGHT_KNEE].x * W, y: lm[L.RIGHT_KNEE].y * H } : null;
+        return lm[L.RIGHT_KNEE]
+          ? { x: lm[L.RIGHT_KNEE].x * W, y: lm[L.RIGHT_KNEE].y * H }
+          : null;
       case "left_shoulder":
         return lm[L.LEFT_SHOULDER]
           ? { x: lm[L.LEFT_SHOULDER].x * W, y: lm[L.LEFT_SHOULDER].y * H }
@@ -412,7 +420,9 @@ function drawIssueCallouts(
           ? { x: lm[L.RIGHT_SHOULDER].x * W, y: lm[L.RIGHT_SHOULDER].y * H }
           : null;
       case "left_hip":
-        return lm[L.LEFT_HIP] ? { x: lm[L.LEFT_HIP].x * W, y: lm[L.LEFT_HIP].y * H } : null;
+        return lm[L.LEFT_HIP]
+          ? { x: lm[L.LEFT_HIP].x * W, y: lm[L.LEFT_HIP].y * H }
+          : null;
       case "right_hip":
         return lm[L.RIGHT_HIP]
           ? { x: lm[L.RIGHT_HIP].x * W, y: lm[L.RIGHT_HIP].y * H }
@@ -482,7 +492,7 @@ function scoreAgainstTemplate(
   for (const k of refKeys) {
     if (!(k in userAngles)) continue;
     const lmReq = JOINT_LM[k];
-    if (lmReq && !visOK(lmReq, visibility, 0.5)) continue; // gate low-confidence joints
+    if (lmReq && !visOK(lmReq, visibility, 0.35)) continue; // gate low-confidence joints
 
     const diff = wrapDiff(userAngles[k], ref[k]);
     const t = Math.max(1e-6, tol[k] ?? 12);
@@ -504,8 +514,9 @@ function scoreAgainstTemplate(
     } as any;
 
   // Trim the single worst joint
-  rows.sort((a, b) => b[2] - a[2]);
-  const used = rows.slice(1);
+  // Trim worst only if there are at least 3 rows
+  const rowsSorted = [...rows].sort((a, b) => b[2] - a[2]);
+  const used = rowsSorted.length >= 3 ? rowsSorted.slice(1) : rowsSorted;
 
   let num = 0,
     den = 0;
@@ -539,7 +550,9 @@ const WorkoutSession = () => {
   const [currentStep, setCurrentStep] = useState(0);
   const [score, setScore] = useState<number | null>(null);
   // Per-exercise stable scores and session completion
-  const [perExerciseScores, setPerExerciseScores] = useState<(number | null)[]>([]);
+  const [perExerciseScores, setPerExerciseScores] = useState<(number | null)[]>(
+    []
+  );
   const [sessionComplete, setSessionComplete] = useState(false);
   // Buffer of frame-by-frame scores for the current step (high-coverage only)
   const scoreBufferRef = useRef<number[]>([]);
@@ -581,7 +594,8 @@ const WorkoutSession = () => {
 
   // Initialize/reset per-exercise scores array when session templates change
   useEffect(() => {
-    const len = sessionData?.templates?.length || workout?.exercises?.length || 0;
+    const len =
+      sessionData?.templates?.length || workout?.exercises?.length || 0;
     if (len > 0) {
       setPerExerciseScores((prev) => {
         if (prev.length === len) return prev;
@@ -618,7 +632,8 @@ const WorkoutSession = () => {
     setScore(null);
     resetSmoother();
 
-    const total = sessionData?.templates?.length || workout?.exercises?.length || 0;
+    const total =
+      sessionData?.templates?.length || workout?.exercises?.length || 0;
     const nextStep = currentStep + 1;
     if (nextStep < total) {
       setCurrentStep(nextStep);
@@ -626,7 +641,9 @@ const WorkoutSession = () => {
       // End of session
       setSessionComplete(true);
       // stop camera pipeline
-      try { stopCameraRef.current?.(); } catch {}
+      try {
+        stopCameraRef.current?.();
+      } catch {}
     }
   };
 
@@ -642,12 +659,15 @@ const WorkoutSession = () => {
         return Math.max(10, h * 3600 + m * 60 + sec);
       }
     }
-    const m = str.match(/(\d+(?:\.\d+)?)\s*(hours?|hrs?|h|minutes?|mins?|m|seconds?|secs?|s)\b/);
+    const m = str.match(
+      /(\d+(?:\.\d+)?)\s*(hours?|hrs?|h|minutes?|mins?|m|seconds?|secs?|s)\b/
+    );
     if (m) {
       const val = parseFloat(m[1]);
       const unit = m[2];
       if (/h/.test(unit)) return Math.max(10, Math.round(val * 3600));
-      if (/m/.test(unit) && !/ms/.test(unit)) return Math.max(10, Math.round(val * 60));
+      if (/m/.test(unit) && !/ms/.test(unit))
+        return Math.max(10, Math.round(val * 60));
       return Math.max(10, Math.round(val));
     }
     const num = parseInt(str, 10);
@@ -673,7 +693,9 @@ const WorkoutSession = () => {
 
   // Initialize timer on step change
   useEffect(() => {
-    const secs = parseDurationToSeconds(workout?.exercises?.[currentStep]?.duration);
+    const secs = parseDurationToSeconds(
+      workout?.exercises?.[currentStep]?.duration
+    );
     setStepDurationSec(secs);
     setTimeLeftSec(secs);
     setIsTimerRunning(true);
@@ -940,206 +962,231 @@ const WorkoutSession = () => {
           return;
         }
 
-      // Visibility array
-      const visibility: number[] = Array(33).fill(1);
-      for (let i = 0; i < lm.length; i++) {
-        visibility[i] = lm[i]?.visibility ?? 1;
-      }
-
-      // Normalize → angles → smoothing
-      const norm = normalizeXY(lm);
-      if (!norm) {
-        ctx.restore();
-        return;
-      }
-      const rawAngles = extractAngles(norm);
-      const angles: Record<string, number> = {};
-      for (const k of Object.keys(rawAngles)) {
-        angles[k] = smoothAngle(k, rawAngles[k]);
-      }
-
-      // --- Angle score
-      const {
-        score: sAngle,
-        rows,
-        jointErr,
-        coverage = 0,
-        expected = 0,
-        visibleCount = 0,
-      } = scoreAgainstTemplate(angles, tpl, visibility) as any;
-      lastCoverageRef.current = coverage;
-
-      // --- Optional hybrid scores if template landmarks available
-      let sBone = 0,
-        sEmbed = 0;
-      const tplShape = tplShapeRef.current;
-      if (tpl && tplShape.poseId === tpl.pose_id && tplShape.normTpl) {
-        sBone = boneCosineScore(norm, tplShape.normTpl, visibility);
-        const embUser = embedPose(norm);
-        if (tplShape.embTpl && embUser.length) {
-          sEmbed = similarityEmbed(embUser, tplShape.embTpl);
+        // Visibility array
+        const visibility: number[] = Array(33).fill(1);
+        for (let i = 0; i < lm.length; i++) {
+          visibility[i] = lm[i]?.visibility ?? 1;
         }
-      }
 
-      // Blend (angles dominate). If angle score missing, fall back to others.
-      let finalScore: number | null = null;
-      if (sAngle != null) {
-        finalScore = Math.round(0.6 * sAngle + 0.25 * sBone + 0.15 * sEmbed);
-      } else if (sBone || sEmbed) {
-        finalScore = Math.round(0.65 * sBone + 0.35 * sEmbed);
-      }
-
-      // Penalize low coverage (discourages hiding limbs)
-      if (finalScore != null) {
-        const cov = Math.max(0, Math.min(1, coverage));
-        // 0 at 0.75 coverage, 1 at 1.0 coverage (linear ramp)
-        const covFactor = Math.max(0, Math.min(1, (cov - 0.75) / 0.25));
-        finalScore = Math.round(finalScore * covFactor);
-      }
-
-      // EMA smoothing for display
-      if (finalScore != null) {
-        const prev = scoreEmaRef.current;
-        const alpha = 0.25;
-        const ema = prev == null ? finalScore : Math.round(alpha * finalScore + (1 - alpha) * prev);
-        scoreEmaRef.current = ema;
-        setScore(ema);
-        // Capture only high-coverage frames for stable aggregation
-        if (coverage >= 0.85) {
-          const buf = scoreBufferRef.current;
-          buf.push(ema);
-          if (buf.length > 600) buf.splice(0, buf.length - 600); // ~20s at 30fps
+        // Normalize → angles → smoothing
+        const norm = normalizeXY(lm);
+        if (!norm) {
+          ctx.restore();
+          return;
         }
-      } else {
-        scoreEmaRef.current = null;
-        setScore(null);
-      }
+        const rawAngles = extractAngles(norm);
+        const angles: Record<string, number> = {};
+        for (const k of Object.keys(rawAngles)) {
+          angles[k] = smoothAngle(k, rawAngles[k]);
+        }
 
-      // Feedback and prompts
-      const missing = missingLimbGroups(visibility, 0.5);
-      if (coverage < 0.6 || missing.length >= 2) {
-        setFeedback(
-          `Move back and show your full body. Missing: ${missing.join(", ")}`
-        );
-      } else if (rows.length) {
-        const sorted = [...rows].sort((a, b) => b[2] - a[2]); // [joint, diff, norm, tol, w]
-        const top = sorted.filter((r) => r[2] >= 0.6).slice(0, 2);
-        if (!top.length) {
-          setFeedback("Nice! Hold steady…");
+        // --- Angle score
+        const {
+          score: sAngle,
+          rows,
+          jointErr,
+          coverage = 0,
+          expected = 0,
+          visibleCount = 0,
+        } = scoreAgainstTemplate(angles, tpl, visibility) as any;
+        lastCoverageRef.current = coverage;
+
+        // --- Optional hybrid scores if template landmarks available
+        let sBone = 0,
+          sEmbed = 0;
+        const tplShape = tplShapeRef.current;
+        if (tpl && tplShape.poseId === tpl.pose_id && tplShape.normTpl) {
+          sBone = boneCosineScore(norm, tplShape.normTpl, visibility);
+          const embUser = embedPose(norm);
+          if (tplShape.embTpl && embUser.length) {
+            sEmbed = similarityEmbed(embUser, tplShape.embTpl);
+          }
+        }
+
+        // Blend (angles dominate). If angle score missing, fall back to others.
+        let finalScore: number | null = null;
+        if (sAngle != null) {
+          finalScore = Math.round(0.6 * sAngle + 0.25 * sBone + 0.15 * sEmbed);
+        } else if (sBone || sEmbed) {
+          finalScore = Math.round(0.65 * sBone + 0.35 * sEmbed);
+        }
+
+        // Penalize low coverage (discourages hiding limbs)
+        if (finalScore != null) {
+          // Only apply coverage penalty if angles contributed (i.e., rows existed)
+          const usedAngleCoverage = (rows?.length ?? 0) > 0 ? coverage : 1.0;
+          const cov = Math.max(0, Math.min(1, usedAngleCoverage));
+          const covFactor = Math.max(0.5, 0.5 + (0.5 * (cov - 0.5)) / 0.5);
+          finalScore = Math.round(finalScore * covFactor);
+        }
+
+        // EMA smoothing for display
+        if (finalScore != null) {
+          const prev = scoreEmaRef.current;
+          const alpha = 0.25;
+          const ema =
+            prev == null
+              ? finalScore
+              : Math.round(alpha * finalScore + (1 - alpha) * prev);
+          scoreEmaRef.current = ema;
+          setScore(ema);
+          // Capture only high-coverage frames for stable aggregation
+          if (coverage >= 0.85) {
+            const buf = scoreBufferRef.current;
+            buf.push(ema);
+            if (buf.length > 600) buf.splice(0, buf.length - 600); // ~20s at 30fps
+          }
         } else {
-          const tips = top.map(([joint, diff]) => {
+          scoreEmaRef.current = null;
+          setScore(null);
+        }
+
+        // Feedback and prompts
+        const missing = missingLimbGroups(visibility, 0.5);
+        if (coverage < 0.6 || missing.length >= 2) {
+          setFeedback(
+            `Move back and show your full body. Missing: ${missing.join(", ")}`
+          );
+        } else if (rows.length) {
+          const sorted = [...rows].sort((a, b) => b[2] - a[2]); // [joint, diff, norm, tol, w]
+          const top = sorted.filter((r) => r[2] >= 0.6).slice(0, 2);
+          if (!top.length) {
+            setFeedback("Nice! Hold steady…");
+          } else {
+            const tips = top.map(([joint, diff]) => {
+              const ref = (tpl.angles_deg || {})[joint] as number | undefined;
+              const val = angles[joint];
+              const delta =
+                ref != null && val != null
+                  ? Math.round(ref - val)
+                  : Math.round(diff);
+              const mag = Math.abs(delta);
+              const dir = delta > 0 ? "increase" : "decrease";
+              // Friendly verbs for common joints
+              const verb = /elbow|knee/.test(joint)
+                ? delta > 0
+                  ? "straighten"
+                  : "bend"
+                : /spine/.test(joint)
+                ? delta > 0
+                  ? "stand more upright"
+                  : "lean slightly"
+                : dir;
+              const name = joint.replace(/_/g, " ");
+              return `${verb} ${name} ~${mag}°`;
+            });
+            setFeedback(tips.join(" • "));
+          }
+        } else {
+          setFeedback("Find the camera and stand tall. 🙂");
+        }
+
+        // Draw skeleton color-coded by ANGLE error (intuitive)
+        drawSkeletonColored(ctx, lm, POSE_CONNECTIONS as any, jointErr);
+
+        // Draw callouts for the top issues near the relevant joints
+        let issueCallouts: Array<{ joint: string; text: string }> = [];
+        if (rows.length) {
+          const sorted = [...rows].sort((a, b) => b[2] - a[2]);
+          const top = sorted.filter((r) => r[2] >= 0.6).slice(0, 2);
+          issueCallouts = top.map(([joint, diff]) => {
             const ref = (tpl.angles_deg || {})[joint] as number | undefined;
             const val = angles[joint];
-            const delta = ref != null && val != null ? Math.round(ref - val) : Math.round(diff);
+            const delta =
+              ref != null && val != null
+                ? Math.round(ref - val)
+                : Math.round(diff);
             const mag = Math.abs(delta);
-            const dir = delta > 0 ? "increase" : "decrease";
-            // Friendly verbs for common joints
+            const dir = delta > 0 ? "↑" : "↓";
+            const nice = joint.replace(/_/g, " ");
+            // Short label e.g., "bend left elbow 12°"
             const verb = /elbow|knee/.test(joint)
               ? delta > 0
                 ? "straighten"
                 : "bend"
               : /spine/.test(joint)
               ? delta > 0
-                ? "stand more upright"
-                : "lean slightly"
-              : dir;
-            const name = joint.replace(/_/g, " ");
-            return `${verb} ${name} ~${mag}°`;
+                ? "upright"
+                : "lean"
+              : delta > 0
+              ? "increase"
+              : "decrease";
+            const text = `${verb} ${nice} ${mag}° ${dir}`;
+            return { joint, text };
           });
-          setFeedback(tips.join(" • "));
         }
-      } else {
-        setFeedback("Find the camera and stand tall. 🙂");
-      }
+        drawIssueCallouts(ctx, lm, issueCallouts);
 
-      // Draw skeleton color-coded by ANGLE error (intuitive)
-      drawSkeletonColored(ctx, lm, POSE_CONNECTIONS as any, jointErr);
+        // If limbs missing, draw a gentle overlay prompt
+        if (coverage < 0.8 || missing.length) {
+          const pad = 12;
+          const text = `Move back to show full body${
+            missing.length ? ` • Missing: ${missing.join(", ")}` : ""
+          }`;
+          ctx.font = "16px system-ui, -apple-system, Segoe UI, Roboto";
+          const metrics = ctx.measureText(text);
+          const tw = Math.ceil(metrics.width) + pad * 2;
+          const th = 34;
+          const x = Math.max(8, Math.floor((ctx.canvas.width - tw) / 2));
+          const y = 10;
+          ctx.fillStyle = "rgba(0,0,0,0.55)";
+          ctx.fillRect(x, y, tw, th);
+          ctx.strokeStyle = "rgba(255,255,255,0.25)";
+          ctx.strokeRect(x + 0.5, y + 0.5, tw - 1, th - 1);
+          ctx.fillStyle = "#fff";
+          ctx.fillText(text, x + pad, y + th - 12);
+        }
 
-      // Draw callouts for the top issues near the relevant joints
-      let issueCallouts: Array<{ joint: string; text: string }> = [];
-      if (rows.length) {
-        const sorted = [...rows].sort((a, b) => b[2] - a[2]);
-        const top = sorted.filter((r) => r[2] >= 0.6).slice(0, 2);
-        issueCallouts = top.map(([joint, diff]) => {
-          const ref = (tpl.angles_deg || {})[joint] as number | undefined;
-          const val = angles[joint];
-          const delta = ref != null && val != null ? Math.round(ref - val) : Math.round(diff);
-          const mag = Math.abs(delta);
-          const dir = delta > 0 ? "↑" : "↓";
-          const nice = joint.replace(/_/g, " ");
-          // Short label e.g., "bend left elbow 12°"
-          const verb = /elbow|knee/.test(joint)
-            ? delta > 0
-              ? "straighten"
-              : "bend"
-            : /spine/.test(joint)
-            ? delta > 0
-              ? "upright"
-              : "lean"
-            : delta > 0
-            ? "increase"
-            : "decrease";
-          const text = `${verb} ${nice} ${mag}° ${dir}`;
-          return { joint, text };
-        });
-      }
-      drawIssueCallouts(ctx, lm, issueCallouts);
+        ctx.restore();
+      });
 
-      // If limbs missing, draw a gentle overlay prompt
-      if (coverage < 0.8 || missing.length) {
-        const pad = 12;
-        const text = `Move back to show full body${missing.length ? ` • Missing: ${missing.join(", ")}` : ""}`;
-        ctx.font = "16px system-ui, -apple-system, Segoe UI, Roboto";
-        const metrics = ctx.measureText(text);
-        const tw = Math.ceil(metrics.width) + pad * 2;
-        const th = 34;
-        const x = Math.max(8, Math.floor((ctx.canvas.width - tw) / 2));
-        const y = 10;
-        ctx.fillStyle = "rgba(0,0,0,0.55)";
-        ctx.fillRect(x, y, tw, th);
-        ctx.strokeStyle = "rgba(255,255,255,0.25)";
-        ctx.strokeRect(x + 0.5, y + 0.5, tw - 1, th - 1);
-        ctx.fillStyle = "#fff";
-        ctx.fillText(text, x + pad, y + th - 12);
-      }
+      camera = new MediaPipeCamera(video, {
+        onFrame: async () => {
+          if (pose && video) await pose.send({ image: video });
+        },
+        width: 1280,
+        height: 720,
+      });
+      camera.start();
 
-      ctx.restore();
-    });
+      stopCameraRef.current = () => {
+        try {
+          camera?.stop();
+        } catch {}
+        try {
+          (pose as any)?.close?.();
+        } catch {}
+        try {
+          ro?.disconnect();
+        } catch {}
+      };
 
-    camera = new MediaPipeCamera(video, {
-      onFrame: async () => {
-        if (pose && video) await pose.send({ image: video });
-      },
-      width: 1280,
-      height: 720,
-    });
-    camera.start();
+      toast({
+        title: "Webcam activated",
+        description: "Pose detection started",
+      });
 
-    stopCameraRef.current = () => {
-      try { camera?.stop(); } catch {}
-      try { (pose as any)?.close?.(); } catch {}
-      try { ro?.disconnect(); } catch {}
+      return () => {
+        cancelled = true;
+        try {
+          camera?.stop();
+        } catch {}
+        try {
+          (pose as any)?.close?.();
+        } catch {}
+        ro?.disconnect();
+      };
     };
 
-    toast({ title: "Webcam activated", description: "Pose detection started" });
-
+    if (!sessionComplete) start();
     return () => {
-      cancelled = true;
+      // ensure cleanup if effect re-runs
       try {
         camera?.stop();
       } catch {}
       try {
         (pose as any)?.close?.();
       } catch {}
-      ro?.disconnect();
-    };
-    };
-
-    if (!sessionComplete) start();
-    return () => {
-      // ensure cleanup if effect re-runs
-      try { camera?.stop(); } catch {}
-      try { (pose as any)?.close?.(); } catch {}
       ro?.disconnect();
     };
   }, [ensureCamera, sessionComplete]);
@@ -1152,7 +1199,8 @@ const WorkoutSession = () => {
     }
   }, [sessionComplete]);
 
-  const totalSteps = sessionData?.templates?.length || workout?.exercises?.length || 0;
+  const totalSteps =
+    sessionData?.templates?.length || workout?.exercises?.length || 0;
   const isLast = currentStep + 1 >= totalSteps;
 
   // Reset per-step buffers when the step changes (covers auto-advance cases)
@@ -1167,7 +1215,9 @@ const WorkoutSession = () => {
   if (sessionComplete) {
     const items = workout?.exercises || [];
     const avg = (() => {
-      const vals = perExerciseScores.filter((v): v is number => typeof v === "number");
+      const vals = perExerciseScores.filter(
+        (v): v is number => typeof v === "number"
+      );
       if (!vals.length) return null;
       return Math.round(vals.reduce((a, b) => a + b, 0) / vals.length);
     })();
@@ -1177,13 +1227,20 @@ const WorkoutSession = () => {
           <div className="flex items-center justify-between">
             <h1 className="text-3xl font-bold">Session Report</h1>
             <div className="flex gap-3">
-              <Button variant="outline" onClick={() => navigate("/")}>Home</Button>
-              <Button onClick={() => navigate("/preset")}>New Preset Workout</Button>
+              <Button variant="outline" onClick={() => navigate("/")}>
+                Home
+              </Button>
+              <Button onClick={() => navigate("/preset")}>
+                New Preset Workout
+              </Button>
               <Button
                 variant="secondary"
                 onClick={() => {
                   // Reset state and restart session
-                  const len = sessionData?.templates?.length || workout?.exercises?.length || 0;
+                  const len =
+                    sessionData?.templates?.length ||
+                    workout?.exercises?.length ||
+                    0;
                   setPerExerciseScores(len ? new Array(len).fill(null) : []);
                   scoreBufferRef.current = [];
                   scoreEmaRef.current = null;
@@ -1193,7 +1250,9 @@ const WorkoutSession = () => {
                   setCurrentStep(0);
                   setSessionComplete(false);
                   // Reset and start timer for first step
-                  const secs = parseDurationToSeconds(workout?.exercises?.[0]?.duration);
+                  const secs = parseDurationToSeconds(
+                    workout?.exercises?.[0]?.duration
+                  );
                   setStepDurationSec(secs);
                   setTimeLeftSec(secs);
                   setIsTimerRunning(true);
@@ -1205,20 +1264,34 @@ const WorkoutSession = () => {
           </div>
           <Card>
             <CardHeader>
-              <CardTitle>Overview {avg != null ? `(Avg ${avg}%)` : ""}</CardTitle>
+              <CardTitle>
+                Overview {avg != null ? `(Avg ${avg}%)` : ""}
+              </CardTitle>
             </CardHeader>
             <CardContent>
               <div className="divide-y">
-                {(items.length ? items : new Array(perExerciseScores.length).fill(null)).map((ex, i) => (
-                  <div key={i} className="flex items-center justify-between py-3">
+                {(items.length
+                  ? items
+                  : new Array(perExerciseScores.length).fill(null)
+                ).map((ex, i) => (
+                  <div
+                    key={i}
+                    className="flex items-center justify-between py-3"
+                  >
                     <div className="text-sm">
-                      <div className="font-medium">{ex?.name || `Exercise ${i + 1}`}</div>
+                      <div className="font-medium">
+                        {ex?.name || `Exercise ${i + 1}`}
+                      </div>
                       {ex?.description ? (
-                        <div className="text-xs text-muted-foreground line-clamp-1">{ex.description}</div>
+                        <div className="text-xs text-muted-foreground line-clamp-1">
+                          {ex.description}
+                        </div>
                       ) : null}
                     </div>
                     <div className="text-lg font-semibold">
-                      {perExerciseScores[i] != null ? `${perExerciseScores[i]}%` : "—"}
+                      {perExerciseScores[i] != null
+                        ? `${perExerciseScores[i]}%`
+                        : "—"}
                     </div>
                   </div>
                 ))}
@@ -1245,7 +1318,9 @@ const WorkoutSession = () => {
             End Session
           </Button>
           <h1 className="text-3xl font-bold text-foreground">
-            {currentTemplate?.pose_id || workout?.workoutName || "Workout Session"}
+            {currentTemplate?.pose_id ||
+              workout?.workoutName ||
+              "Workout Session"}
           </h1>
         </div>
 
@@ -1340,17 +1415,20 @@ const WorkoutSession = () => {
                 />
                 {/* Controls overlay */}
                 <div className="absolute bottom-3 right-3 flex gap-2">
-                  <Button variant="outline" onClick={() => setIsTimerRunning((r) => !r)}>
+                  <Button
+                    variant="outline"
+                    onClick={() => setIsTimerRunning((r) => !r)}
+                  >
                     {isTimerRunning ? "Pause" : "Resume"}
                   </Button>
                   <Button variant="secondary" onClick={goNext}>
                     {isLast ? "Finish" : "Next"}
                   </Button>
                 </div>
-            </div>
-          </CardContent>
-        </Card>
-      </div>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
 
         {/* Stats */}
         <div className="grid md:grid-cols-2 gap-4">
@@ -1375,7 +1453,12 @@ const WorkoutSession = () => {
                 <Progress
                   value={Math.max(
                     0,
-                    Math.min(100, ((stepDurationSec - timeLeftSec) / Math.max(1, stepDurationSec)) * 100)
+                    Math.min(
+                      100,
+                      ((stepDurationSec - timeLeftSec) /
+                        Math.max(1, stepDurationSec)) *
+                        100
+                    )
                   )}
                   className="w-full"
                 />
