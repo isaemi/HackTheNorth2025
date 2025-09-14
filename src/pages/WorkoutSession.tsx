@@ -260,7 +260,7 @@ function boneCosineScore(
 ) {
   const cosines: number[] = [];
   for (const [i, j] of BONES) {
-    const ok = (visibility[i] ?? 1) >= 0.5 && (visibility[j] ?? 1) >= 0.5;
+    const ok = (visibility[i] ?? 1) >= 0.35 && (visibility[j] ?? 1) >= 0.35;
     if (!ok || !normUser[i] || !normUser[j] || !normTpl[i] || !normTpl[j])
       continue;
     const u = unitVec(normUser[i], normUser[j]);
@@ -293,16 +293,20 @@ function embedPose(norm: Record<string, { x: number; y: number }>) {
   if (!shL || !shR) return [];
   const base = { x: (shL.x + shR.x) / 2, y: (shL.y + shR.y) / 2 };
   const v: number[] = [];
+  let haveAny = false;
   for (const k of EMB_KEYS) {
     const p = norm[k];
-    if (!p) return [];
+    if (!p) continue; // skip instead of aborting
     v.push(p.x - base.x, p.y - base.y);
+    haveAny = true;
   }
   for (const [i, j] of BONES) {
+    if (!norm[i] || !norm[j]) continue;
     const u = unitVec(norm[i], norm[j]);
     v.push(u.x, u.y);
+    haveAny = true;
   }
-  return v;
+  return haveAny ? v : [];
 }
 
 function similarityEmbed(u: number[], t: number[]) {
@@ -981,13 +985,11 @@ const WorkoutSession = () => {
         }
 
         // --- Angle score
-        const {
+        let {
           score: sAngle,
           rows,
           jointErr,
           coverage = 0,
-          expected = 0,
-          visibleCount = 0,
         } = scoreAgainstTemplate(angles, tpl, visibility) as any;
         lastCoverageRef.current = coverage;
 
@@ -1020,30 +1022,40 @@ const WorkoutSession = () => {
           finalScore = Math.round(finalScore * covFactor);
         }
 
-        // EMA smoothing for display
-        console.debug("DBG", {
+        // After coverage penalty
+        if (finalScore != null && !Number.isFinite(finalScore)) {
+          finalScore = 0; // never propagate NaN; 0 is safe & visible
+        }
+
+        // Also guard coverage (defensive)
+        if (!Number.isFinite(coverage)) {
+          coverage = 1; // never penalize on invalid coverage
+        }
+
+        console.debug("DBG2", {
           sAngle,
           rowsLen: rows?.length ?? 0,
           sBone,
           sEmbed,
-          tplPose: tpl?.pose_id,
-          hasAngles: !!tpl?.angles_deg,
+          coverage,
+          finalScoreBeforeEMA: finalScore,
         });
 
+        // EMA to smooth out jitter
         if (finalScore != null) {
           const prev = scoreEmaRef.current;
           const alpha = 0.25;
+          const base = Number.isFinite(finalScore) ? finalScore : 0;
           const ema =
-            prev == null
-              ? finalScore
-              : Math.round(alpha * finalScore + (1 - alpha) * prev);
-          scoreEmaRef.current = ema;
-          setScore(ema);
-          // Capture only high-coverage frames for stable aggregation
-          if (coverage >= 0.85) {
-            const buf = scoreBufferRef.current;
-            buf.push(ema);
-            if (buf.length > 600) buf.splice(0, buf.length - 600); // ~20s at 30fps
+            prev == null ? base : Math.round(alpha * base + (1 - alpha) * prev);
+          if (Number.isFinite(ema)) {
+            scoreEmaRef.current = ema;
+            setScore(ema);
+            if (coverage >= 0.85) {
+              const buf = scoreBufferRef.current;
+              buf.push(ema);
+              if (buf.length > 600) buf.splice(0, buf.length - 600);
+            }
           }
         } else {
           scoreEmaRef.current = null;
