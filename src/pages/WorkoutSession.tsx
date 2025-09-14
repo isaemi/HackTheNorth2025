@@ -1031,9 +1031,9 @@ const WorkoutSession = () => {
       pose.onResults((results: any) => {
         if (!pipelineAliveRef.current) return;
 
-        // ---- Canvas prep ----
         ctx.save();
         ctx.clearRect(0, 0, canvas.width, canvas.height);
+
         if (results.image)
           ctx.drawImage(results.image, 0, 0, canvas.width, canvas.height);
         if (sessionComplete) {
@@ -1041,7 +1041,6 @@ const WorkoutSession = () => {
           return;
         }
 
-        // ---- Inputs & guards ----
         const lm: Pt[] | undefined = results.poseLandmarks;
         const tpl = currentTemplateRef.current;
         if (!lm || !tpl) {
@@ -1049,140 +1048,183 @@ const WorkoutSession = () => {
           return;
         }
 
-        // ---- Visibility array ----
+        // --- Visibility
         const visibility: number[] = Array(33).fill(1);
         for (let i = 0; i < lm.length; i++)
           visibility[i] = lm[i]?.visibility ?? 1;
 
-        // ---- Enforce orientation: templates assume subject's LEFT is closer to camera ----
-        // BlazePose z: more negative ≈ closer to camera.
-        const avgZ = (inds: number[]) =>
-          inds.reduce((s, i) => s + (lm[i]?.z ?? 0), 0) /
-          Math.max(1, inds.length);
-        const leftSide = [
-          L.LEFT_SHOULDER,
-          L.LEFT_ELBOW,
-          L.LEFT_WRIST,
-          L.LEFT_HIP,
-          L.LEFT_KNEE,
-          L.LEFT_ANKLE,
-        ];
-        const rightSide = [
-          L.RIGHT_SHOULDER,
-          L.RIGHT_ELBOW,
-          L.RIGHT_WRIST,
-          L.RIGHT_HIP,
-          L.RIGHT_KNEE,
-          L.RIGHT_ANKLE,
-        ];
-        const leftZ = avgZ(leftSide);
-        const rightZ = avgZ(rightSide);
-        const shouldBeLeftFacing = (tpl.camera_view ?? "left") === "left";
-        const rightIsCloser = rightZ < leftZ; // more negative z => closer
-
-        // If the template expects left-facing but right is closer, mirror; if it expects right and left is closer, mirror.
-        const needMirror = shouldBeLeftFacing ? rightIsCloser : !rightIsCloser;
-
-        // Mirror in normalized space by flipping X after we normalize, so 0 stays mid-hip.
-        const normUnflipped = normalizeXY(lm);
-        if (!normUnflipped) {
+        // --- Normalize → angles (median smoothed)
+        const norm = normalizeXY(lm);
+        if (!norm) {
           ctx.restore();
           return;
         }
-        const norm: Record<string, { x: number; y: number }> = {};
-        for (const k in normUnflipped) {
-          const p = (normUnflipped as any)[k];
-          norm[k] = needMirror ? { x: -p.x, y: p.y } : p;
-        }
-
-        // ---- Angles (median-smoothed per joint) ----
         const rawAngles = extractAngles(norm);
         const angles: Record<string, number> = {};
         for (const k of Object.keys(rawAngles))
           angles[k] = smoothAngle(k, rawAngles[k]);
 
-        // ---- Angle score (slightly softened) ----
-        // Uses your same function but we gently widen tolerance during live matching.
-        const softenedTpl = {
-          ...tpl,
-          tolerance_deg: Object.fromEntries(
-            Object.entries(tpl.tolerance_deg ?? {}).map(([k, v]) => [
-              k,
-              (v as number) * 1.2,
-            ])
-          ),
+        // ---------- Softer ANGLE score ----------
+        const ref = tpl.angles_deg || {};
+        const tol = tpl.tolerance_deg || {};
+        const weights = tpl.weights || {};
+        const rows: Array<[string, number, number, number, number]> = []; // [key, diffDeg, normErr, tolEffDeg, w]
+
+        const softTolScale = 1.6; // widen “green zone”
+        const curveP = 1.25; // smoothness for logistic-ish mapping
+
+        const wrapDiff = (a: number, b: number) => {
+          const d = Math.abs(a - b) % 360;
+          return d > 180 ? 360 - d : d;
         };
 
-        let {
-          score: sAngle,
-          rows,
-          jointErr,
-          coverage = 0,
-        } = scoreAgainstTemplate(angles, softenedTpl, visibility) as any;
+        const visOK = (need: number[], vis: number[], t = 0.35) =>
+          need.every((i) => (vis[i] ?? 0) >= t);
+        const JOINT_LM_REQ = {
+          left_elbow: [11, 13, 15],
+          right_elbow: [12, 14, 16],
+          left_knee: [23, 25, 27],
+          right_knee: [24, 26, 28],
+          left_shoulder: [13, 11, 23],
+          right_shoulder: [14, 12, 24],
+          left_hip: [11, 23, 25],
+          right_hip: [12, 24, 26],
+          spine_tilt: [11, 12, 23, 24],
+        } as Record<string, number[]>;
+
+        const jointScore = (diff: number, tolDeg: number) => {
+          // Logistic-ish: score ~1 when diff << tol; falls off smoothly
+          const n = Math.max(0, diff) / Math.max(1e-6, tolDeg * softTolScale);
+          return 1 / (1 + Math.pow(n, curveP)); // 1..0
+        };
+
+        const jointErr: Record<string, number> = {};
+        const refKeys = Object.keys(ref);
+        for (const k of refKeys) {
+          if (!(k in angles)) continue;
+          const need = JOINT_LM_REQ[k];
+          if (need && !visOK(need, visibility)) continue;
+          const diff = wrapDiff(angles[k], ref[k]);
+          const tEff = Math.max(6, tol[k] ?? 12); // never allow hyper-strict tolerances
+          const w = weights[k] ?? 1;
+          const nErr = 1 - jointScore(diff, tEff); // keep for coloring (0 good → 1 bad)
+          rows.push([k, diff, nErr, tEff, w]);
+          jointErr[k] = nErr;
+        }
+
+        // Coverage & “trim worst” only when it makes sense
+        const expected = refKeys.length;
+        const visibleCount = rows.length;
+        const coverage = expected ? visibleCount / expected : 0;
         lastCoverageRef.current = coverage;
 
-        // ---- Optional hybrid similarity when template landmarks exist ----
+        let sAngle = 0;
+        if (rows.length) {
+          const sorted = [...rows].sort((a, b) => b[2] - a[2]); // highest error first
+          const used = rows.length >= 4 ? sorted.slice(1) : sorted; // trim worst only if enough joints
+
+          let wsum = 0,
+            good = 0;
+          for (const [, diff, , tEff, w] of used) {
+            good += jointScore(diff, tEff) * w;
+            wsum += w;
+          }
+          const raw = wsum ? good / wsum : 0;
+          // slight top-end lift (but less extreme)
+          sAngle = Math.round(100 * Math.pow(raw, 0.8));
+        } else {
+          sAngle = null as any; // no angle signal
+        }
+
+        // ---------- Bone & Embedding (saner mappings) ----------
         let sBone = 0,
           sEmbed = 0;
         const tplShape = tplShapeRef.current;
         if (tpl && tplShape.poseId === tpl.pose_id && tplShape.normTpl) {
-          // Mirror cached template too when we mirrored the user (to keep “left is toward camera” in sync)
-          const tplNorm = needMirror
-            ? Object.fromEntries(
-                Object.entries(tplShape.normTpl).map(([k, p]: any) => [
-                  k,
-                  { x: -p.x, y: p.y },
-                ])
-              )
-            : tplShape.normTpl;
+          // cosine mapped to [0,1], so opposite direction is penalized
+          const BONES: Array<[number, number]> = [
+            [11, 13],
+            [12, 14],
+            [13, 15],
+            [14, 16],
+            [23, 25],
+            [24, 26],
+            [25, 27],
+            [26, 28],
+            [11, 23],
+            [12, 24],
+          ];
+          const unit = (
+            a: { x: number; y: number },
+            b: { x: number; y: number }
+          ) => {
+            const vx = b.x - a.x,
+              vy = b.y - a.y;
+            const n = Math.hypot(vx, vy) || 1e-6;
+            return { x: vx / n, y: vy / n };
+          };
+          const coses: number[] = [];
+          for (const [i, j] of BONES) {
+            if (
+              !tplShape.normTpl[i] ||
+              !tplShape.normTpl[j] ||
+              !norm[i] ||
+              !norm[j]
+            )
+              continue;
+            if ((visibility[i] ?? 1) < 0.35 || (visibility[j] ?? 1) < 0.35)
+              continue;
+            const u = unit(norm[i], norm[j]),
+              v = unit(tplShape.normTpl[i], tplShape.normTpl[j]);
+            const cos = Math.max(-1, Math.min(1, u.x * v.x + u.y * v.y));
+            coses.push((cos + 1) / 2); // 1 = same direction, 0 = opposite
+          }
+          if (coses.length)
+            sBone = Math.round(
+              100 * (coses.reduce((a, b) => a + b, 0) / coses.length)
+            );
 
-          sBone = boneCosineScore(norm, tplNorm, visibility);
-
-          const embUser = embedPose(norm);
-          const embTpl =
-            needMirror && tplShape.embTpl
-              ? (() => {
-                  // Recompute embedded template when mirrored (embedding depends on coords & unit bones)
-                  const mirroredTpl = Object.fromEntries(
-                    Object.entries(tplShape.normTpl!).map(([k, p]: any) => [
-                      k,
-                      { x: -p.x, y: p.y },
-                    ])
-                  ) as Record<string, { x: number; y: number }>;
-                  return embedPose(mirroredTpl);
-                })()
-              : tplShape.embTpl;
-
-          if (embTpl && embUser.length)
-            sEmbed = similarityEmbed(embUser, embTpl);
+          if (tplShape.embTpl) {
+            const embUser = embedPose(norm);
+            if (embUser.length === tplShape.embTpl.length) {
+              // same as your similarityEmbed but ok to keep softer margin if you like
+              let d2 = 0;
+              for (let i = 0; i < embUser.length; i++) {
+                const d = embUser[i] - tplShape.embTpl[i];
+                d2 += d * d;
+              }
+              const scale = Math.sqrt(embUser.length) * 0.18;
+              const s = Math.max(0, 1 - Math.sqrt(d2) / (scale + 1e-6));
+              sEmbed = Math.round(100 * s);
+            }
+          }
         }
 
-        // ---- Blend final score ----
+        // ---------- Blend (angles dominate) ----------
         let finalScore: number | null = null;
         if (sAngle != null) {
-          finalScore = Math.round(0.65 * sAngle + 0.2 * sBone + 0.15 * sEmbed);
+          finalScore = Math.round(0.8 * sAngle + 0.15 * sBone + 0.05 * sEmbed);
         } else if (sBone || sEmbed) {
-          finalScore = Math.round(0.7 * sBone + 0.3 * sEmbed);
+          // no angles? be conservative
+          finalScore = Math.round(0.55 * sBone + 0.45 * sEmbed);
         }
 
-        // Coverage penalty (only if angle rows contributed)
+        // ---------- Softer coverage penalty (discourage hiding, not punish harshly) ----------
         if (finalScore != null) {
-          const usedAngleCoverage = (rows?.length ?? 0) > 0 ? coverage : 1.0;
-          const cov = Math.max(0, Math.min(1, usedAngleCoverage));
-          const covFactor = 0.5 + 0.5 * cov; // 0.5..1.0
+          const cov = rows.length ? coverage : 1; // only penalize if we actually used angles
+          const covFactor = 0.7 + 0.3 * Math.max(0, Math.min(1, cov)); // 0.7..1.0
           finalScore = Math.round(finalScore * covFactor);
         }
 
-        if (finalScore != null && !Number.isFinite(finalScore)) finalScore = 0;
-        if (!Number.isFinite(coverage)) coverage = 1;
-
-        // ---- EMA smoothing & buffer (only store when coverage is strong) ----
+        // Clamp & EMA
         if (finalScore != null) {
+          finalScore = Math.max(1, Math.min(100, finalScore));
           const prev = scoreEmaRef.current;
-          const alpha = 0.35; // snappier than 0.25
-          const base = Number.isFinite(finalScore) ? finalScore : 0;
+          const alpha = 0.25;
           const ema =
-            prev == null ? base : Math.round(alpha * base + (1 - alpha) * prev);
+            prev == null
+              ? finalScore
+              : Math.round(alpha * finalScore + (1 - alpha) * prev);
           scoreEmaRef.current = ema;
           setScore(ema);
           if (coverage >= 0.85) {
@@ -1190,29 +1232,33 @@ const WorkoutSession = () => {
             buf.push(ema);
             if (buf.length > 600) buf.splice(0, buf.length - 600);
           }
+        } else {
+          scoreEmaRef.current = null;
+          setScore(null);
         }
 
-        // ---- Feedback ----
+        // ---------- Feedback ----------
         const missing = missingLimbGroups(visibility, 0.5);
         if (coverage < 0.6 || missing.length >= 2) {
           setFeedback(
             `Move back and show your full body. Missing: ${missing.join(", ")}`
           );
-        } else if (rows?.length) {
-          const sorted = [...rows].sort((a, b) => b[2] - a[2]); // [joint, diff, norm, tol, w]
-          const top = sorted.filter((r) => r[2] >= 0.6).slice(0, 2);
+        } else if (rows.length) {
+          const sorted = [...rows].sort((a, b) => b[2] - a[2]); // by error
+          const top = sorted.filter((r) => r[2] >= 0.75).slice(0, 2); // slightly higher threshold
           if (!top.length) {
             setFeedback("Nice! Hold steady…");
           } else {
             const tips = top.map(([joint, diff]) => {
-              const ref = (tpl.angles_deg || {})[joint] as number | undefined;
-              const val = angles[joint];
+              const refDeg = (tpl.angles_deg || {})[joint] as
+                | number
+                | undefined;
+              const valDeg = angles[joint];
               const delta =
-                ref != null && val != null
-                  ? Math.round(ref - val)
+                refDeg != null && valDeg != null
+                  ? Math.round(refDeg - valDeg)
                   : Math.round(diff);
               const mag = Math.abs(delta);
-              const dir = delta > 0 ? "increase" : "decrease";
               const verb = /elbow|knee/.test(joint)
                 ? delta > 0
                   ? "straighten"
@@ -1221,7 +1267,9 @@ const WorkoutSession = () => {
                 ? delta > 0
                   ? "stand more upright"
                   : "lean slightly"
-                : dir;
+                : delta > 0
+                ? "increase"
+                : "decrease";
               return `${verb} ${joint.replace(/_/g, " ")} ~${mag}°`;
             });
             setFeedback(tips.join(" • "));
@@ -1230,18 +1278,18 @@ const WorkoutSession = () => {
           setFeedback("Find the camera and stand tall. 🙂");
         }
 
-        // ---- Draw ----
-        drawSkeletonColored(ctx, lm, POSE_CONNECTIONS as any, jointErr ?? {});
-        let issueCallouts: Array<{ joint: string; text: string }> = [];
-        if (rows?.length) {
+        // ---------- Draw ----------
+        drawSkeletonColored(ctx, lm, POSE_CONNECTIONS as any, jointErr);
+
+        if (rows.length) {
           const sorted = [...rows].sort((a, b) => b[2] - a[2]);
-          const top = sorted.filter((r) => r[2] >= 0.6).slice(0, 2);
-          issueCallouts = top.map(([joint, diff]) => {
-            const ref = (tpl.angles_deg || {})[joint] as number | undefined;
-            const val = angles[joint];
+          const top = sorted.filter((r) => r[2] >= 0.75).slice(0, 2);
+          const issues = top.map(([joint, diff]) => {
+            const refDeg = (tpl.angles_deg || {})[joint] as number | undefined;
+            const valDeg = angles[joint];
             const delta =
-              ref != null && val != null
-                ? Math.round(ref - val)
+              refDeg != null && valDeg != null
+                ? Math.round(refDeg - valDeg)
                 : Math.round(diff);
             const mag = Math.abs(delta);
             const dir = delta > 0 ? "↑" : "↓";
@@ -1261,8 +1309,8 @@ const WorkoutSession = () => {
               text: `${verb} ${joint.replace(/_/g, " ")} ${mag}° ${dir}`,
             };
           });
+          drawIssueCallouts(ctx, lm, issues);
         }
-        drawIssueCallouts(ctx, lm, issueCallouts);
 
         if (coverage < 0.8 || missing.length) {
           const pad = 12;
@@ -1270,8 +1318,7 @@ const WorkoutSession = () => {
             missing.length ? ` • Missing: ${missing.join(", ")}` : ""
           }`;
           ctx.font = "16px system-ui, -apple-system, Segoe UI, Roboto";
-          const metrics = ctx.measureText(text);
-          const tw = Math.ceil(metrics.width) + pad * 2;
+          const tw = Math.ceil(ctx.measureText(text).width) + pad * 2;
           const th = 34;
           const x = Math.max(8, Math.floor((ctx.canvas.width - tw) / 2));
           const y = 10;
