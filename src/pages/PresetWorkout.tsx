@@ -10,6 +10,7 @@ import api from "@/services/api";
 import { useWorkout } from "@/context/WorkoutContext";
 import { useToast } from "@/hooks/use-toast";
 
+
 const PresetWorkout = () => {
   const navigate = useNavigate();
   const [selectedLevel, setSelectedLevel] = useState<string>("");
@@ -253,7 +254,6 @@ const PresetWorkout = () => {
         {/* Start Button */}
         <div className="flex justify-center mt-6">
           <Button
-            variant="hero"
             size="lg"
             onClick={handleStartWorkout}
             disabled={
@@ -263,7 +263,7 @@ const PresetWorkout = () => {
               isSubmitting
             }
             aria-busy={isSubmitting}
-            className="min-w-[200px]"
+            className="w-full sm:w-auto h-20 text-2xl bg-primary text-white rounded-xl px-10"
           >
             {isSubmitting ? (
               <span className="flex items-center gap-2">
