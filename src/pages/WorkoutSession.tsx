@@ -633,7 +633,6 @@ const WorkoutSession = () => {
     // Clear buffer for next step
     scoreBufferRef.current = [];
     scoreEmaRef.current = null;
-    setScore(null);
     resetSmoother();
 
     const total =
@@ -1043,14 +1042,12 @@ const WorkoutSession = () => {
           const base = Number.isFinite(finalScore) ? finalScore : 0;
           const ema =
             prev == null ? base : Math.round(alpha * base + (1 - alpha) * prev);
-          if (Number.isFinite(ema)) {
-            scoreEmaRef.current = ema;
-            setScore(ema);
-            if (coverage >= 0.85) {
-              const buf = scoreBufferRef.current;
-              buf.push(ema);
-              if (buf.length > 600) buf.splice(0, buf.length - 600);
-            }
+          scoreEmaRef.current = ema;
+          setScore(ema);
+          if (coverage >= 0.85) {
+            const buf = scoreBufferRef.current;
+            buf.push(ema);
+            if (buf.length > 600) buf.splice(0, buf.length - 600);
           }
         }
 
@@ -1221,7 +1218,6 @@ const WorkoutSession = () => {
   useEffect(() => {
     scoreBufferRef.current = [];
     scoreEmaRef.current = null;
-    setScore(null);
     resetSmoother();
   }, [currentStep, resetSmoother]);
 
