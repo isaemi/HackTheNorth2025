@@ -211,6 +211,23 @@ function useAngleSmoother(N = 7) {
 const visOK = (names: number[], vis: number[], thresh = 0.5) =>
   names.every((i) => (vis[i] ?? 0) >= thresh);
 
+// Coarse limb groups for user-friendly visibility prompts
+const LIMB_GROUPS: Record<string, number[]> = {
+  "left arm": [L.LEFT_SHOULDER, L.LEFT_ELBOW, L.LEFT_WRIST],
+  "right arm": [L.RIGHT_SHOULDER, L.RIGHT_ELBOW, L.RIGHT_WRIST],
+  "left leg": [L.LEFT_HIP, L.LEFT_KNEE, L.LEFT_ANKLE],
+  "right leg": [L.RIGHT_HIP, L.RIGHT_KNEE, L.RIGHT_ANKLE],
+  torso: [L.LEFT_SHOULDER, L.RIGHT_SHOULDER, L.LEFT_HIP, L.RIGHT_HIP],
+};
+
+function missingLimbGroups(visibility: number[], thresh = 0.5): string[] {
+  const out: string[] = [];
+  for (const [name, inds] of Object.entries(LIMB_GROUPS)) {
+    if (!visOK(inds, visibility, thresh)) out.push(name);
+  }
+  return out;
+}
+
 // ======================= HYBRID SIMILARITY HELPERS =======================
 
 // Bone list for orientation similarity
@@ -376,8 +393,9 @@ function scoreAgainstTemplate(
   const tol = (tpl.tolerance_deg || {}) as Record<string, number>;
   const W = (tpl.weights || {}) as Record<string, number>;
 
+  const refKeys = Object.keys(ref);
   const rows: Array<[string, number, number, number, number]> = []; // [joint, diffDeg, normErr, tolDeg, weight]
-  for (const k of Object.keys(ref)) {
+  for (const k of refKeys) {
     if (!(k in userAngles)) continue;
     const lmReq = JOINT_LM[k];
     if (lmReq && !visOK(lmReq, visibility, 0.5)) continue; // gate low-confidence joints
@@ -389,8 +407,17 @@ function scoreAgainstTemplate(
     rows.push([k, diff, n, t, w]);
   }
 
+  const expected = refKeys.length;
+  const visibleCount = rows.length;
   if (!rows.length)
-    return { score: null, rows: [], jointErr: {} as Record<string, number> };
+    return {
+      score: null,
+      rows: [],
+      jointErr: {} as Record<string, number>,
+      coverage: 0,
+      expected,
+      visibleCount,
+    } as any;
 
   // Trim the single worst joint
   rows.sort((a, b) => b[2] - a[2]);
@@ -410,7 +437,8 @@ function scoreAgainstTemplate(
 
   const jointErr: Record<string, number> = {};
   rows.forEach(([k, , n]) => (jointErr[k] = n));
-  return { score, rows, jointErr };
+  const coverage = expected ? visibleCount / expected : 0;
+  return { score, rows, jointErr, coverage, expected, visibleCount } as any;
 }
 
 // ======================= MAIN COMPONENT =======================
@@ -442,6 +470,9 @@ const WorkoutSession = () => {
     normTpl?: Record<string, { x: number; y: number }>;
     embTpl?: number[];
   }>({});
+
+  // Score EMA to reduce jitter in display
+  const scoreEmaRef = useRef<number | null>(null);
 
   // Keep the latest template available to the pose callback without
   // reinitializing the camera/pose pipeline on every change.
@@ -705,7 +736,10 @@ const WorkoutSession = () => {
         score: sAngle,
         rows,
         jointErr,
-      } = scoreAgainstTemplate(angles, tpl, visibility);
+        coverage = 0,
+        expected = 0,
+        visibleCount = 0,
+      } = scoreAgainstTemplate(angles, tpl, visibility) as any;
 
       // --- Optional hybrid scores if template landmarks available
       let sBone = 0,
@@ -726,25 +760,84 @@ const WorkoutSession = () => {
       } else if (sBone || sEmbed) {
         finalScore = Math.round(0.65 * sBone + 0.35 * sEmbed);
       }
-      setScore(finalScore);
 
-      // Feedback (simple, driven by angles)
-      if (rows.length) {
-        const worst = [...rows].sort((a, b) => b[2] - a[2])[0]; // [joint, diff, norm, tol, w]
-        const [joint, diff, normErr, tol] = worst;
+      // Penalize low coverage (discourages hiding limbs)
+      if (finalScore != null) {
+        const cov = Math.max(0, Math.min(1, coverage));
+        // 0 at 0.75 coverage, 1 at 1.0 coverage (linear ramp)
+        const covFactor = Math.max(0, Math.min(1, (cov - 0.75) / 0.25));
+        finalScore = Math.round(finalScore * covFactor);
+      }
+
+      // EMA smoothing for display
+      if (finalScore != null) {
+        const prev = scoreEmaRef.current;
+        const alpha = 0.25;
+        const ema = prev == null ? finalScore : Math.round(alpha * finalScore + (1 - alpha) * prev);
+        scoreEmaRef.current = ema;
+        setScore(ema);
+      } else {
+        scoreEmaRef.current = null;
+        setScore(null);
+      }
+
+      // Feedback and prompts
+      const missing = missingLimbGroups(visibility, 0.5);
+      if (coverage < 0.6 || missing.length >= 2) {
         setFeedback(
-          normErr <= 1
-            ? "Nice! Hold steady…"
-            : `Adjust ${joint.replace("_", " ")} ~${Math.round(
-                diff
-              )}° (within ${Math.round(tol)}°)`
+          `Move back and show your full body. Missing: ${missing.join(", ")}`
         );
+      } else if (rows.length) {
+        const sorted = [...rows].sort((a, b) => b[2] - a[2]); // [joint, diff, norm, tol, w]
+        const top = sorted.filter((r) => r[2] > 1).slice(0, 2);
+        if (!top.length) {
+          setFeedback("Nice! Hold steady…");
+        } else {
+          const tips = top.map(([joint, diff]) => {
+            const ref = (tpl.angles_deg || {})[joint] as number | undefined;
+            const val = angles[joint];
+            const delta = ref != null && val != null ? Math.round(ref - val) : Math.round(diff);
+            const mag = Math.abs(delta);
+            const dir = delta > 0 ? "increase" : "decrease";
+            // Friendly verbs for common joints
+            const verb = /elbow|knee/.test(joint)
+              ? delta > 0
+                ? "straighten"
+                : "bend"
+              : /spine/.test(joint)
+              ? delta > 0
+                ? "stand more upright"
+                : "lean slightly"
+              : dir;
+            const name = joint.replace(/_/g, " ");
+            return `${verb} ${name} ~${mag}°`;
+          });
+          setFeedback(tips.join(" • "));
+        }
       } else {
         setFeedback("Find the camera and stand tall. 🙂");
       }
 
       // Draw skeleton color-coded by ANGLE error (intuitive)
       drawSkeletonColored(ctx, lm, POSE_CONNECTIONS as any, jointErr);
+
+      // If limbs missing, draw a gentle overlay prompt
+      if (coverage < 0.8 || missing.length) {
+        const pad = 12;
+        const text = `Move back to show full body${missing.length ? ` • Missing: ${missing.join(", ")}` : ""}`;
+        ctx.font = "16px system-ui, -apple-system, Segoe UI, Roboto";
+        const metrics = ctx.measureText(text);
+        const tw = Math.ceil(metrics.width) + pad * 2;
+        const th = 34;
+        const x = Math.max(8, Math.floor((ctx.canvas.width - tw) / 2));
+        const y = 10;
+        ctx.fillStyle = "rgba(0,0,0,0.55)";
+        ctx.fillRect(x, y, tw, th);
+        ctx.strokeStyle = "rgba(255,255,255,0.25)";
+        ctx.strokeRect(x + 0.5, y + 0.5, tw - 1, th - 1);
+        ctx.fillStyle = "#fff";
+        ctx.fillText(text, x + pad, y + th - 12);
+      }
 
       ctx.restore();
     });
