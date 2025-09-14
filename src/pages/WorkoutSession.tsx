@@ -443,6 +443,10 @@ const WorkoutSession = () => {
     embTpl?: number[];
   }>({});
 
+  // Keep the latest template available to the pose callback without
+  // reinitializing the camera/pose pipeline on every change.
+  const currentTemplateRef = useRef<any>(null);
+
   const currentTemplate = useMemo(
     () => sessionData?.templates?.[currentStep],
     [sessionData, currentStep]
@@ -623,7 +627,12 @@ const WorkoutSession = () => {
     }
   }, [currentTemplate]);
 
-  // Webcam + Pose Detection
+  // Sync the ref whenever the current template changes
+  useEffect(() => {
+    currentTemplateRef.current = currentTemplate ?? null;
+  }, [currentTemplate]);
+
+  // Webcam + Pose Detection (initialize once)
   useEffect(() => {
     const video = videoRef.current;
     const canvas = liveCanvasRef.current;
@@ -653,16 +662,13 @@ const WorkoutSession = () => {
       enableSegmentation: false,
       minDetectionConfidence: 0.6,
       minTrackingConfidence: 0.6,
-      selfieMode: true,
+      // Disable selfie mode to avoid mirrored processing
+      selfieMode: false,
     });
 
     pose.onResults((results: any) => {
       ctx.save();
       ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-      // Mirror
-      ctx.translate(canvas.width, 0);
-      ctx.scale(-1, 1);
 
       // Draw video bg
       if (results.image) {
@@ -670,7 +676,8 @@ const WorkoutSession = () => {
       }
 
       const lm: Pt[] | undefined = results.poseLandmarks;
-      if (!lm || !currentTemplate) {
+      const tpl = currentTemplateRef.current;
+      if (!lm || !tpl) {
         ctx.restore();
         return;
       }
@@ -698,13 +705,13 @@ const WorkoutSession = () => {
         score: sAngle,
         rows,
         jointErr,
-      } = scoreAgainstTemplate(angles, currentTemplate, visibility);
+      } = scoreAgainstTemplate(angles, tpl, visibility);
 
       // --- Optional hybrid scores if template landmarks available
       let sBone = 0,
         sEmbed = 0;
       const tplShape = tplShapeRef.current;
-      if (tplShape.poseId === currentTemplate.pose_id && tplShape.normTpl) {
+      if (tpl && tplShape.poseId === tpl.pose_id && tplShape.normTpl) {
         sBone = boneCosineScore(norm, tplShape.normTpl, visibility);
         const embUser = embedPose(norm);
         if (tplShape.embTpl && embUser.length) {
@@ -762,8 +769,7 @@ const WorkoutSession = () => {
       } catch {}
       ro.disconnect();
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentTemplate]);
+  }, []);
 
   return (
     <div className="h-screen bg-gradient-background p-6">

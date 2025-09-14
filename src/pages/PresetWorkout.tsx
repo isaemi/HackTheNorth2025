@@ -35,7 +35,10 @@ const PresetWorkout = () => {
 
   const handleStartWorkout = async () => {
     setIsSubmitting(true);
-    const pending = toast({ title: "Generating workout", description: "Hang tight…" });
+    const pending = toast({
+      title: "Generating workout",
+      description: "Hang tight…",
+    });
     try {
       const payload: Record<string, any> = {
         level: selectedLevel,
@@ -55,7 +58,9 @@ const PresetWorkout = () => {
         const w = resp.data as any;
         pending.update({
           title: "Workout ready",
-          description: [w?.workoutName, w?.totalDuration].filter(Boolean).join(" • ") || "Ready to start",
+          description:
+            [w?.workoutName, w?.totalDuration].filter(Boolean).join(" • ") ||
+            "Ready to start",
           open: true,
         } as any);
       } catch {}
@@ -68,7 +73,6 @@ const PresetWorkout = () => {
       pending.update({
         title: "Failed to generate workout",
         description: "Please try again.",
-        // @ts-expect-error variant supported by ToastProps
         variant: "destructive",
         open: true,
       } as any);
@@ -185,7 +189,9 @@ const PresetWorkout = () => {
                       }
                       aria-disabled={isSubmitting}
                       className={`text-center p-2 w-full block text-xs ${
-                        isSubmitting ? "pointer-events-none opacity-60" : "cursor-pointer"
+                        isSubmitting
+                          ? "pointer-events-none opacity-60"
+                          : "cursor-pointer"
                       } ${
                         selectedStyle === style
                           ? "bg-primary text-primary-foreground"
@@ -251,7 +257,10 @@ const PresetWorkout = () => {
             size="lg"
             onClick={handleStartWorkout}
             disabled={
-              !selectedLevel || !selectedStyle || !selectedDuration || isSubmitting
+              !selectedLevel ||
+              !selectedStyle ||
+              !selectedDuration ||
+              isSubmitting
             }
             aria-busy={isSubmitting}
             className="min-w-[200px]"
