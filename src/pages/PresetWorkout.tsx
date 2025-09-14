@@ -4,9 +4,11 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
-import { ArrowLeft, Clock, Users, Target } from "lucide-react";
+import { ArrowLeft, Clock, Users, Target, Loader2 } from "lucide-react";
 import backgroundImage from "@/assets/background-image.png";
 import api from "@/services/api";
+import { useWorkout } from "@/context/WorkoutContext";
+import { useToast } from "@/hooks/use-toast";
 
 const PresetWorkout = () => {
   const navigate = useNavigate();
@@ -15,6 +17,8 @@ const PresetWorkout = () => {
   const [selectedStyle, setSelectedStyle] = useState<string>("");
   const [selectedDuration, setSelectedDuration] = useState<string>("");
   const [injuries, setInjuries] = useState<string>("");
+  const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
+  const { toast } = useToast();
 
   const levels = ["Beginner", "Intermediate", "Advanced", "Master"];
 
@@ -27,42 +31,49 @@ const PresetWorkout = () => {
 
   const durations = ["15 minutes", "30 minutes", "45 minutes", "1 Hour"];
 
+  const { setWorkout } = useWorkout();
+
   const handleStartWorkout = async () => {
+    setIsSubmitting(true);
+    const pending = toast({ title: "Generating workout", description: "Hang tight…" });
     try {
-      let resp = await api.post("/cohere", {
+      const payload: Record<string, any> = {
         level: selectedLevel,
+        category: selectedCategory,
         style: selectedStyle,
         duration: selectedDuration,
-        injuries,
-      });
+      };
+      if (injuries?.trim()) payload.injuries = injuries.trim();
 
-      // Fallback to /martian if cohere route fails
-      if (resp.status < 200 || resp.status >= 300) {
-        console.warn("Cohere failed, fallback to Martian");
-        resp = await api.post("/martian", {
-          level: selectedLevel,
-          style: selectedStyle,
-          duration: selectedDuration,
-          injuries,
-        });
-      }
+      const resp = await api.post("/workouts/generate", payload);
 
-      const data = resp.data;
-      console.log("Workout routines:", data);
+      // Store for WorkoutSession consumption later
+      setWorkout(resp.data);
 
-      navigate("/session", {
-        state: {
-          type: "preset",
-          level: selectedLevel,
-          style: selectedStyle,
-          duration: selectedDuration,
-          injuries,
-          routines: data,
-        },
-      });
+      // Success toast
+      try {
+        const w = resp.data as any;
+        pending.update({
+          title: "Workout ready",
+          description: [w?.workoutName, w?.totalDuration].filter(Boolean).join(" • ") || "Ready to start",
+          open: true,
+        } as any);
+      } catch {}
+
+      // Navigate to session view
+      navigate("/session");
+      setTimeout(() => pending.dismiss?.(), 2500);
     } catch (err) {
       console.error("Workout fetch failed:", err);
-      alert("Failed to fetch workouts. Please try again.");
+      pending.update({
+        title: "Failed to generate workout",
+        description: "Please try again.",
+        // @ts-expect-error variant supported by ToastProps
+        variant: "destructive",
+        open: true,
+      } as any);
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -77,7 +88,7 @@ const PresetWorkout = () => {
       className="min-h-screen bg-cover bg-center bg-no-repeat p-6 flex items-center justify-center"
       style={{ backgroundImage: `url(${backgroundImage})` }}
     >
-      <div className="max-w-5xl bg-white/95 backdrop-blur-sm rounded-lg shadow-xl p-6">
+      <div className="max-w-5xl bg-white/95 backdrop-blur-sm rounded-lg shadow-xl p-6 relative">
         {/* Header */}
         <div className="relative mb-6">
           <div className="absolute left-0 top-1/2 -translate-y-1/2">
@@ -112,7 +123,8 @@ const PresetWorkout = () => {
                   variant={selectedLevel === level ? "default" : "outline"}
                   size="sm"
                   className="w-full justify-start text-xs"
-                  onClick={() => setSelectedLevel(level)}
+                  onClick={() => !isSubmitting && setSelectedLevel(level)}
+                  disabled={isSubmitting}
                 >
                   {level}
                 </Button>
@@ -138,9 +150,11 @@ const PresetWorkout = () => {
                   size="sm"
                   className="w-full justify-start text-xs"
                   onClick={() => {
+                    if (isSubmitting) return;
                     setSelectedCategory(category);
                     setSelectedStyle("");
                   }}
+                  disabled={isSubmitting}
                 >
                   {category}
                 </Button>
@@ -169,12 +183,15 @@ const PresetWorkout = () => {
                       variant={
                         selectedStyle === style ? "default" : "secondary"
                       }
-                      className={`cursor-pointer text-center p-2 w-full block text-xs ${
+                      aria-disabled={isSubmitting}
+                      className={`text-center p-2 w-full block text-xs ${
+                        isSubmitting ? "pointer-events-none opacity-60" : "cursor-pointer"
+                      } ${
                         selectedStyle === style
                           ? "bg-primary text-primary-foreground"
                           : ""
                       }`}
-                      onClick={() => setSelectedStyle(style)}
+                      onClick={() => !isSubmitting && setSelectedStyle(style)}
                     >
                       {style}
                     </Badge>
@@ -201,7 +218,8 @@ const PresetWorkout = () => {
                   }
                   size="sm"
                   className="w-full justify-start text-xs"
-                  onClick={() => setSelectedDuration(duration)}
+                  onClick={() => !isSubmitting && setSelectedDuration(duration)}
+                  disabled={isSubmitting}
                 >
                   {duration}
                 </Button>
@@ -221,6 +239,7 @@ const PresetWorkout = () => {
               value={injuries}
               onChange={(e) => setInjuries(e.target.value)}
               className="min-h-[60px] text-sm"
+              disabled={isSubmitting}
             />
           </CardContent>
         </Card>
@@ -231,12 +250,31 @@ const PresetWorkout = () => {
             variant="hero"
             size="lg"
             onClick={handleStartWorkout}
-            disabled={!selectedLevel || !selectedStyle || !selectedDuration}
+            disabled={
+              !selectedLevel || !selectedStyle || !selectedDuration || isSubmitting
+            }
+            aria-busy={isSubmitting}
             className="min-w-[200px]"
           >
-            Start Workout Session
+            {isSubmitting ? (
+              <span className="flex items-center gap-2">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                Generating...
+              </span>
+            ) : (
+              "Start Workout Session"
+            )}
           </Button>
         </div>
+
+        {isSubmitting && (
+          <div className="absolute inset-0 bg-white/70 backdrop-blur-sm rounded-lg flex items-center justify-center">
+            <div className="flex items-center gap-3 text-foreground">
+              <Loader2 className="h-5 w-5 animate-spin" />
+              <span>Generating your workout…</span>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
