@@ -904,8 +904,11 @@ const WorkoutSession = () => {
     currentTemplateRef.current = currentTemplate ?? null;
   }, [currentTemplate]);
 
+  const pipelineAliveRef = useRef(true);
+
   // Webcam + Pose Detection (initialize once)
   useEffect(() => {
+    pipelineAliveRef.current = true;
     const video = videoRef.current;
     const canvas = liveCanvasRef.current;
     if (!video || !canvas) return;
@@ -946,6 +949,7 @@ const WorkoutSession = () => {
       });
 
       pose.onResults((results: any) => {
+        if (!pipelineAliveRef.current) return; // ignore stale callbacks
         ctx.save();
         ctx.clearRect(0, 0, canvas.width, canvas.height);
 
@@ -1032,15 +1036,6 @@ const WorkoutSession = () => {
           coverage = 1; // never penalize on invalid coverage
         }
 
-        console.debug("DBG2", {
-          sAngle,
-          rowsLen: rows?.length ?? 0,
-          sBone,
-          sEmbed,
-          coverage,
-          finalScoreBeforeEMA: finalScore,
-        });
-
         // EMA to smooth out jitter
         if (finalScore != null) {
           const prev = scoreEmaRef.current;
@@ -1057,9 +1052,6 @@ const WorkoutSession = () => {
               if (buf.length > 600) buf.splice(0, buf.length - 600);
             }
           }
-        } else {
-          scoreEmaRef.current = null;
-          setScore(null);
         }
 
         // Feedback and prompts
@@ -1188,6 +1180,7 @@ const WorkoutSession = () => {
       });
 
       return () => {
+        pipelineAliveRef.current = false;
         cancelled = true;
         try {
           camera?.stop();
@@ -1199,7 +1192,7 @@ const WorkoutSession = () => {
       };
     };
 
-    if (!sessionComplete) start();
+    if (!sessionComplete && !stopCameraRef.current) start();
     return () => {
       // ensure cleanup if effect re-runs
       try {
