@@ -10,7 +10,6 @@ import api from "@/services/api";
 import { useWorkout } from "@/context/WorkoutContext";
 import { useToast } from "@/hooks/use-toast";
 
-
 const PresetWorkout = () => {
   const navigate = useNavigate();
   const [selectedLevel, setSelectedLevel] = useState<string>("");
@@ -50,11 +49,8 @@ const PresetWorkout = () => {
       if (injuries?.trim()) payload.injuries = injuries.trim();
 
       const resp = await api.post("/workouts/generate", payload);
-
-      // Store for WorkoutSession consumption later
       setWorkout(resp.data);
 
-      // Success toast
       try {
         const w = resp.data as any;
         pending.update({
@@ -66,7 +62,6 @@ const PresetWorkout = () => {
         } as any);
       } catch {}
 
-      // Navigate to session view
       navigate("/session");
       setTimeout(() => pending.dismiss?.(), 2500);
     } catch (err) {
@@ -93,7 +88,8 @@ const PresetWorkout = () => {
       className="min-h-screen bg-cover bg-center bg-no-repeat p-6 flex items-center justify-center"
       style={{ backgroundImage: `url(${backgroundImage})` }}
     >
-      <div className="max-w-5xl bg-white/95 backdrop-blur-sm rounded-lg shadow-xl p-6 relative">
+      <div className="max-w-5xl bg-white/95 backdrop-blur-sm rounded-lg p-6 relative 
+                      border-4 border-[#f8c87f] shadow-2xl">
         {/* Header */}
         <div className="relative mb-6">
           <div className="absolute left-0 top-1/2 -translate-y-1/2">
@@ -114,7 +110,7 @@ const PresetWorkout = () => {
 
         <div className="grid md:grid-cols-4 gap-4">
           {/* Level */}
-          <Card className="bg-gradient-card backdrop-blur-sm border-0 shadow-card">
+          <Card className="bg-[#FFF8EB] border border-[#f8c87f] shadow-sm">
             <CardHeader className="pb-3">
               <CardTitle className="flex items-center gap-2 text-sm">
                 <Target className="w-4 h-4 text-primary" />
@@ -125,9 +121,12 @@ const PresetWorkout = () => {
               {levels.map((level) => (
                 <Button
                   key={level}
-                  variant={selectedLevel === level ? "default" : "outline"}
                   size="sm"
-                  className="w-full justify-start text-xs"
+                  className={`w-full justify-start text-xs rounded-md ${
+                    selectedLevel === level
+                      ? "bg-primary text-white border border-primary"
+                      : "bg-[#FFFBF0] border border-[#f8c87f]/50 hover:bg-[#f9e5b5] hover:border-[#f8c87f]"
+                  }`}
                   onClick={() => !isSubmitting && setSelectedLevel(level)}
                   disabled={isSubmitting}
                 >
@@ -138,7 +137,7 @@ const PresetWorkout = () => {
           </Card>
 
           {/* Category */}
-          <Card className="bg-gradient-card backdrop-blur-sm border-0 shadow-card">
+          <Card className="bg-[#FFF8EB] border border-[#f8c87f] shadow-sm">
             <CardHeader className="pb-3">
               <CardTitle className="flex items-center gap-2 text-sm">
                 <Users className="w-4 h-4 text-primary" />
@@ -149,11 +148,12 @@ const PresetWorkout = () => {
               {Object.keys(categories).map((category) => (
                 <Button
                   key={category}
-                  variant={
-                    selectedCategory === category ? "default" : "outline"
-                  }
                   size="sm"
-                  className="w-full justify-start text-xs"
+                  className={`w-full justify-start text-xs rounded-md ${
+                    selectedCategory === category
+                      ? "bg-primary text-white border border-primary"
+                      : "bg-[#FFFBF0] border border-[#f8c87f]/50 hover:bg-[#f9e5b5] hover:border-[#f8c87f]"
+                  }`}
                   onClick={() => {
                     if (isSubmitting) return;
                     setSelectedCategory(category);
@@ -168,7 +168,7 @@ const PresetWorkout = () => {
           </Card>
 
           {/* Style */}
-          <Card className="bg-gradient-card backdrop-blur-sm border-0 shadow-card">
+          <Card className="bg-[#FFF8EB] border border-[#f8c87f] shadow-sm">
             <CardHeader className="pb-3">
               <CardTitle className="flex items-center gap-2 text-sm">
                 <Users className="w-4 h-4 text-primary" />
@@ -185,18 +185,14 @@ const PresetWorkout = () => {
                   {getAvailableStyles().map((style) => (
                     <Badge
                       key={style}
-                      variant={
-                        selectedStyle === style ? "default" : "secondary"
-                      }
-                      aria-disabled={isSubmitting}
-                      className={`text-center p-2 w-full block text-xs ${
+                      className={`text-center p-2 w-full block text-xs rounded-md ${
+                        selectedStyle === style
+                          ? "bg-primary text-white border border-primary"
+                          : "bg-[#FFFBF0] border border-[#f8c87f]/50 hover:bg-[#f9e5b5] hover:border-[#f8c87f]"
+                      } ${
                         isSubmitting
                           ? "pointer-events-none opacity-60"
                           : "cursor-pointer"
-                      } ${
-                        selectedStyle === style
-                          ? "bg-primary text-primary-foreground"
-                          : ""
                       }`}
                       onClick={() => !isSubmitting && setSelectedStyle(style)}
                     >
@@ -209,7 +205,7 @@ const PresetWorkout = () => {
           </Card>
 
           {/* Duration */}
-          <Card className="bg-gradient-card backdrop-blur-sm border-0 shadow-card">
+          <Card className="bg-[#FFF8EB] border border-[#f8c87f] shadow-sm">
             <CardHeader className="pb-3">
               <CardTitle className="flex items-center gap-2 text-sm">
                 <Clock className="w-4 h-4 text-primary" />
@@ -220,12 +216,15 @@ const PresetWorkout = () => {
               {durations.map((duration) => (
                 <Button
                   key={duration}
-                  variant={
-                    selectedDuration === duration ? "default" : "outline"
-                  }
                   size="sm"
-                  className="w-full justify-start text-xs"
-                  onClick={() => !isSubmitting && setSelectedDuration(duration)}
+                  className={`w-full justify-start text-xs rounded-md ${
+                    selectedDuration === duration
+                      ? "bg-primary text-white border border-primary"
+                      : "bg-[#FFFBF0] border border-[#f8c87f]/50 hover:bg-[#f9e5b5] hover:border-[#f8c87f]"
+                  }`}
+                  onClick={() =>
+                    !isSubmitting && setSelectedDuration(duration)
+                  }
                   disabled={isSubmitting}
                 >
                   {duration}
@@ -236,7 +235,7 @@ const PresetWorkout = () => {
         </div>
 
         {/* Injuries */}
-        <Card className="bg-gradient-card backdrop-blur-sm border-0 shadow-card mt-4">
+        <Card className="bg-[#FFF8EB] border border-[#f8c87f] shadow-sm mt-4">
           <CardHeader className="pb-3">
             <CardTitle className="text-sm">Any Injuries?</CardTitle>
           </CardHeader>
@@ -263,7 +262,7 @@ const PresetWorkout = () => {
               isSubmitting
             }
             aria-busy={isSubmitting}
-            className="w-full sm:w-auto h-20 text-2xl bg-primary text-white rounded-xl px-10"
+            className="w-full sm:w-auto h-20 text-2xl bg-primary text-white rounded-xl px-10 shadow-lg hover:border-[#f8c87f] hover:bg-[#f9e5b5] hover:text-foreground"
           >
             {isSubmitting ? (
               <span className="flex items-center gap-2">

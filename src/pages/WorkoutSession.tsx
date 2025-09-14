@@ -8,6 +8,8 @@ import { useToast } from "@/hooks/use-toast";
 import RehabReasoningBanner from "@/components/rehab/RehabReasoningBanner";
 import { useWorkout } from "@/context/WorkoutContext";
 import api from "@/services/api";
+import backgroundImage from "@/assets/background-image.png";
+
 
 // MediaPipe
 import { Pose, POSE_CONNECTIONS } from "@mediapipe/pose";
@@ -1025,7 +1027,7 @@ const WorkoutSession = () => {
         minDetectionConfidence: 0.6,
         minTrackingConfidence: 0.6,
         // Disable selfie mode to avoid mirrored processing
-        selfieMode: false,
+        selfieMode: true,
       });
 
       pose.onResults((results: any) => {
@@ -1415,7 +1417,10 @@ const WorkoutSession = () => {
       return Math.round(vals.reduce((a, b) => a + b, 0) / vals.length);
     })();
     return (
-      <div className="min-h-screen bg-gradient-background p-6">
+      <div
+  className="min-h-screen bg-cover bg-center bg-no-repeat p-6 flex items-center justify-center"
+  style={{ backgroundImage: `url(${backgroundImage})` }}
+>
         <div className="max-w-4xl mx-auto space-y-6">
           <div className="flex items-center justify-between">
             <h1 className="text-3xl font-bold">Session Report</h1>
@@ -1495,28 +1500,31 @@ const WorkoutSession = () => {
       </div>
     );
   }
+return (
+  <div
+    className="min-h-screen bg-cover bg-center bg-no-repeat p-6 flex items-center justify-center"
+    style={{ backgroundImage: `url(${backgroundImage})` }}
+  >
+    <div className="max-w-7xl mx-auto">
+      {/* Header */}
+      <div className="flex items-center justify-between mb-6">
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => navigate("/")}
+          className="flex items-center gap-2"
+        >
+          <ArrowLeft className="w-4 h-4" />
+          End Session
+        </Button>
+        <h1 className="text-3xl font-bold text-foreground">
+          {currentTemplate?.pose_id ||
+            workout?.workoutName ||
+            "Workout Session"}
+        </h1>
+      </div>
 
-  return (
-    <div className="h-screen bg-gradient-background p-6">
-      <div className="max-w-7xl mx-auto">
-        {/* Header */}
-        <div className="flex items-center justify-between mb-6">
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={() => navigate("/")}
-            className="flex items-center gap-2"
-          >
-            <ArrowLeft className="w-4 h-4" />
-            End Session
-          </Button>
-          <h1 className="text-3xl font-bold text-foreground">
-            {currentTemplate?.pose_id ||
-              workout?.workoutName ||
-              "Workout Session"}
-          </h1>
-        </div>
-
+ 
         {/* Rehab reasoning banner if provided */}
         {workout?.reasoning ? (
           <RehabReasoningBanner reasoning={workout.reasoning} />
@@ -1607,17 +1615,22 @@ const WorkoutSession = () => {
                   className="absolute inset-0 w-full h-full"
                 />
                 {/* Controls overlay */}
-                <div className="absolute bottom-3 right-3 flex gap-2">
-                  <Button
-                    variant="outline"
-                    onClick={() => setIsTimerRunning((r) => !r)}
-                  >
-                    {isTimerRunning ? "Pause" : "Resume"}
-                  </Button>
-                  <Button variant="secondary" onClick={goNext}>
-                    {isLast ? "Finish" : "Next"}
-                  </Button>
-                </div>
+               <div className="absolute bottom-6 right-6 flex gap-3">
+  <Button
+    variant="outline"
+    className="bg-white/90 text-black hover:bg-white px-5 py-2"
+    onClick={() => setIsTimerRunning((r) => !r)}
+  >
+    {isTimerRunning ? "Pause" : "Resume"}
+  </Button>
+  <Button
+    className="bg-primary text-white hover:bg-primary/80 px-6 py-2 font-semibold"
+    onClick={goNext}
+  >
+    {isLast ? "Finish" : "Next"}
+  </Button>
+</div>
+
               </div>
             </CardContent>
           </Card>

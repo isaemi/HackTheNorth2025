@@ -27,22 +27,22 @@ const Index = () => {
       />
 
       {/* Title + description */}
-<div className="relative z-10 text-center max-w-4xl mx-auto px-6 pt-14">
-  <h1 className="text-6xl md:text-7xl font-bold text-foreground mb-6 leading-tight text-primary">
+<div className="relative z-10 text-center max-w-4xl mx-auto px-6 pt-28">
+  <h1 className="text-7xl md:text-8xl font-bold text-foreground mb-6 leading-tight text-primary">
     FlowForm
   </h1>
-  <p className="text-xl md:text-2xl text-muted-foreground mb-12 max-w-2xl mx-auto">
+  <p className="text-xl md:text-2xl text-muted-foreground mb-16 max-w-2xl mx-auto">
     Real-time pose detection and personalized feedback to perfect your
     form and track your progress
   </p>
 </div>
 
-{/* Buttons */}
-<div className="relative z-10 mb-24 flex flex-col sm:flex-row gap-10 justify-center items-center">
+{/* Buttons (bottom-left, wide) */}
+<div className="relative z-10 mt-auto mb-24 flex flex-col sm:flex-row gap-10 justify-start items-start w-full px-40">
   <Button
     size="xl"
     onClick={() => navigate("/preset")}
-    className="w-full sm:w-auto h-20 text-2xl bg-primary text-white rounded-xl px-10"
+    className="h-20 w-[320px] text-2xl bg-primary text-white rounded-xl"
   >
     Choose Preset Workout
   </Button>
@@ -50,12 +50,11 @@ const Index = () => {
   <Button
     size="xl"
     onClick={() => navigate("/rehab")}
-    className="w-full sm:w-auto h-20 text-2xl bg-primary text-white rounded-xl px-10"
+    className="h-20 w-[320px] text-2xl bg-primary text-white rounded-xl"
   >
     Begin Rehab
   </Button>
 </div>
-
 
       {/* Decorations */}
       <div className="absolute top-20 left-10 w-20 h-20 bg-primary/5 rounded-full blur-xl"></div>
