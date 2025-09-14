@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { ArrowLeft } from "lucide-react";
+import { ArrowLeft, Loader2 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { useWorkout } from "@/context/WorkoutContext";
 import api from "@/services/api";
@@ -482,21 +482,28 @@ const WorkoutSession = () => {
         const matches: Array<{ pose_id: string; score?: number }> =
           searchResp?.data || [];
         if (!matches.length) {
-          toast({ title: "No pose found", description: `No template matched "${name}"` });
+          toast({
+            title: "No pose found",
+            description: `No template matched "${name}"`,
+          });
           setFailedSet((prev) => {
             const next = new Set(prev);
             next.add(idx);
             return next;
           });
           if (idx === currentStep && sessionData?.templates?.length) {
-            setCurrentStep((p) => (p + 1 < sessionData.templates.length ? p + 1 : 0));
+            setCurrentStep((p) =>
+              p + 1 < sessionData.templates.length ? p + 1 : 0
+            );
           }
           return;
         }
         const best = matches[0];
 
         // B) fetch mediapipe-correct pose data
-        const tplResp = await api.get(`/poses/${encodeURIComponent(best.pose_id)}`);
+        const tplResp = await api.get(
+          `/poses/${encodeURIComponent(best.pose_id)}`
+        );
         const tplData = tplResp?.data || {};
         tplData.pose_id = tplData.pose_id || best.pose_id;
 
@@ -522,7 +529,6 @@ const WorkoutSession = () => {
         toast({
           title: "Pose fetch failed",
           description: `Could not load template for "${name}"`,
-          // @ts-expect-error variant supported by ToastProps
           variant: "destructive",
         } as any);
       } finally {
@@ -536,7 +542,8 @@ const WorkoutSession = () => {
 
     if (workout?.exercises?.length && sessionData?.templates?.length) {
       workout.exercises.forEach((_, idx) => {
-        if (!sessionData.templates[idx] && !failedSet.has(idx)) fetchForIndex(idx);
+        if (!sessionData.templates[idx] && !failedSet.has(idx))
+          fetchForIndex(idx);
       });
     }
   }, [workout, sessionData?.templates?.length, failedSet, currentStep]);
@@ -585,8 +592,10 @@ const WorkoutSession = () => {
     if (t?.overlayUrl) {
       const img = new Image();
       img.onload = () => {
-        const cw = canvas.width, ch = canvas.height;
-        const iw = img.width, ih = img.height;
+        const cw = canvas.width,
+          ch = canvas.height;
+        const iw = img.width,
+          ih = img.height;
         const scale = Math.min(cw / iw, ch / ih);
         const dw = Math.max(1, Math.floor(iw * scale));
         const dh = Math.max(1, Math.floor(ih * scale));
@@ -802,10 +811,14 @@ const WorkoutSession = () => {
                 {currentTemplate ? (
                   <div className="text-sm space-y-1">
                     <div className="font-semibold">
-                      {workout?.exercises?.[currentStep]?.name || currentTemplate?.pose_id}
+                      {workout?.exercises?.[currentStep]?.name ||
+                        currentTemplate?.pose_id}
                     </div>
                     <div className="text-muted-foreground">
-                      {[workout?.exercises?.[currentStep]?.difficulty, workout?.exercises?.[currentStep]?.duration]
+                      {[
+                        workout?.exercises?.[currentStep]?.difficulty,
+                        workout?.exercises?.[currentStep]?.duration,
+                      ]
                         .filter(Boolean)
                         .join(" • ")}
                     </div>
@@ -814,18 +827,23 @@ const WorkoutSession = () => {
                         {workout.exercises[currentStep].description}
                       </p>
                     )}
-                    {Array.isArray(workout?.exercises?.[currentStep]?.modifications) &&
-                      ((workout?.exercises?.[currentStep]?.modifications?.length ?? 0) > 0) && (
+                    {Array.isArray(
+                      workout?.exercises?.[currentStep]?.modifications
+                    ) &&
+                      (workout?.exercises?.[currentStep]?.modifications
+                        ?.length ?? 0) > 0 && (
                         <p className="text-xs text-muted-foreground">
-                          Modifications: {workout?.exercises?.[currentStep]?.modifications?.join(
-                            ", "
-                          )}
+                          Modifications:{" "}
+                          {workout?.exercises?.[
+                            currentStep
+                          ]?.modifications?.join(", ")}
                         </p>
                       )}
                   </div>
                 ) : failedSet.has(currentStep) ? (
                   <p className="text-sm text-muted-foreground">
-                    No template found for "{workout?.exercises?.[currentStep]?.name}". Skipping…
+                    No template found for "
+                    {workout?.exercises?.[currentStep]?.name}". Skipping…
                   </p>
                 ) : null}
               </div>
